@@ -238,6 +238,19 @@ input[type=month]{border:1px solid var(--line);border-radius:7px;padding:7px 10p
 .wstat{border-left:3px solid var(--line);padding-left:12px}
 .tile.has-img{background:#fff;border:1px solid var(--line);padding:3px}
 .tile img{width:100%;height:100%;object-fit:contain;display:block;border-radius:4px}
+.wrap{max-width:1500px}
+.shell3{grid-template-columns:250px minmax(0,1fr) minmax(320px,400px)}
+.rcol .tl-head{grid-template-columns:1fr}
+.rcol .tl-head > div:first-child{display:none}
+.rcol .months{font-size:11px}
+.rcol .tl-row{grid-template-columns:1fr;gap:0;padding:10px 0}
+.rcol .tl-label{padding:0 0 2px}
+.rcol .track{height:40px}.rcol .bar{top:9px}.rcol .ms{top:14px}
+.rcol .list li.todo{flex-wrap:wrap}
+.rcol .due{flex:1 1 60%;padding-left:28px;white-space:normal}
+.rcol .tabs button{padding:8px 10px}
+@media (max-width:1240px){.shell3{grid-template-columns:250px minmax(0,1fr)}.shell3 > .rcol{grid-column:2}}
+@media (max-width:820px){.shell3{grid-template-columns:1fr}.shell3 > .rcol{grid-column:auto}}
 </style>
 </head>
 <body>
@@ -889,7 +902,7 @@ function viewHome() {
         : `${me()} 계정으로 등록된 과제가 없습니다. 관리자에게 이 메일 주소를 연구진으로 등록해 달라고 요청해 주세요.`)
     : h("div", { class: "plist" }, rooms.map(r => h("a", { class: "pitem", href: "#p-" + r.id }, tile(r.title), h("span", { class: "ptitle" }, r.title),
         h("span", { class: "lock" }, openTodos(r) ? `할 일 ${openTodos(r)}건` : "할 일 없음"))));
-  return h("div", { class: "shell" }, sidebar(null, null),
+  return h("div", { class: "shell shell3" }, sidebar(null, null),
     h("div", { class: "stack" },
       h("div", { class: "row spread" },
         h("div", null, h("h1", null, "연구과제"), h("div", { class: "muted" }, admin ? "관리자 화면입니다. 모든 과제와 마감이 보입니다." : `${S.user.name || me()} 님이 참여하는 과제입니다.`)),
@@ -898,13 +911,15 @@ function viewHome() {
           h("button", { class: "btn primary", type: "button", onclick: () => editProject(null) }, "과제 추가")) : null),
       dayCard([h("b", null, S.loaded.projects ? `${admin ? "등록된" : "참여"} 과제 ${rooms.length}건` : "과제 불러오는 중…"), h("span", { class: "small muted" }, "왼쪽 목록의 도구를 누르면 새 창으로 열립니다.")]),
       admin ? workPanel() : null,
-      S.loaded.projects && (admin || rooms.length) ? allCalendar(true) : null,
+      h("section", { class: "panel stack", style: "gap:8px" }, h("h2", null, admin ? "과제" : "내 과제"), list),
+      S.loaded.projects && (admin || rooms.length) ? allCalendar(true) : null),
+    // 오른쪽 단: 연구기간 → 전체 마감·할 일 → 내가 담당 중인 업무 → 내가 요청한 업무
+    h("div", { class: "stack rcol" },
+      admin && S.loaded.projects ? timeline() : null,
+      S.loaded.projects && rooms.length ? agenda() : null,
       admin && S.loaded.projects && rooms.length ? [
         taskPanel("내가 담당 중인 업무", "나에게 배정된 할 일입니다.", t => t.assignee === me(), "tabMine", "예정된 업무가 없습니다. 과제의 ‘할 일’ 탭에서 담당을 ‘나 (관리자)’로 정하면 여기에 모입니다."),
-        taskPanel("내가 요청한 업무", "내가 연구진에게 배정한 할 일입니다.", t => t.assignee !== me() && (!t.by || t.by === me()), "tabReq", "요청한 업무가 없습니다.")] : null,
-      S.loaded.projects && rooms.length ? agenda() : null,
-      h("section", { class: "panel stack", style: "gap:8px" }, h("h2", null, admin ? "과제" : "내 과제"), list),
-      admin && S.loaded.projects ? timeline() : null));
+        taskPanel("내가 요청한 업무", "내가 연구진에게 배정한 할 일입니다.", t => t.assignee !== me() && (!t.by || t.by === me()), "tabReq", "요청한 업무가 없습니다.")] : null));
 }
 
 /* ---------- 화면: 과제 ---------- */
