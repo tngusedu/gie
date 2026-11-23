@@ -187,6 +187,23 @@ button.cev{cursor:pointer}
 .cev.ms2{background:var(--soft);color:var(--ink)}
 .cev.mark{background:transparent;color:var(--muted);border:1px dashed var(--line)}
 input[type=time]{border:1px solid var(--line);border-radius:7px;padding:7px 10px;background:var(--bg);width:100%;min-width:0}
+.filters{display:flex;gap:6px;flex-wrap:wrap}
+.filters button{border:1px solid var(--line);background:transparent;border-radius:99px;padding:3px 11px;cursor:pointer;font-size:13px}
+.filters button[aria-pressed="true"]{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.list li.todo{align-items:center;gap:10px}
+.todo input[type=checkbox]{flex:0 0 18px;width:18px;height:18px;accent-color:var(--accent);cursor:pointer}
+.todo input[disabled]{cursor:default}
+.ttitle{font-weight:600;overflow-wrap:anywhere}
+.todo.done .ttitle{font-weight:400;text-decoration:line-through;color:var(--muted)}
+.due{font-size:13px;white-space:nowrap;color:var(--muted)}
+.due.late,.gname.late{color:var(--crit);font-weight:600}
+.gname{font-size:13px;font-weight:600;color:var(--muted);padding-top:6px}
+.kind{flex:0 0 auto;font-size:12px;font-weight:600;border-radius:5px;padding:1px 7px;border:1px solid currentColor}
+.k-ms{color:var(--warn)} .k-td{color:var(--accent)} .k-ev{color:var(--ok)}
+.cev.td2{background:transparent;color:var(--ink);border:1px solid var(--line)}
+.cev.td2.done{color:var(--muted);text-decoration:line-through}
+a.pitem{text-decoration:none}
+@media (max-width:820px){.list li.todo{flex-wrap:wrap}.due{flex-basis:100%;padding-left:28px}}
 </style>
 </head>
 <body>
@@ -201,26 +218,11 @@ input[type=time]{border:1px solid var(--line);border-radius:7px;padding:7px 10px
 <dialog id="cfm" class="narrow"></dialog>
 <div id="toast" role="status" hidden></div>
 
-<script>
-"use strict";
-/* ---------- 암호화: 과제 내용과 관리자 자료는 비밀번호로 잠가 data.json에 넣는다 ---------- */
-const ITER = 600000;
-const _enc = new TextEncoder(), _dec = new TextDecoder();
-const b64 = buf => { let s = ""; const a = new Uint8Array(buf); for (let i = 0; i < a.length; i++) s += String.fromCharCode(a[i]); return btoa(s); };
-const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
-async function keyOf(pw, salt) {
-  const base = await crypto.subtle.importKey("raw", _enc.encode(pw.normalize("NFC")), "PBKDF2", false, ["deriveKey"]);
-  return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: ITER, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-}
-async function seal(obj, pw) {
-  const salt = crypto.getRandomValues(new Uint8Array(16)), iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, await keyOf(pw, salt), _enc.encode(JSON.stringify(obj)));
-  return { salt: b64(salt), iv: b64(iv), data: b64(ct) };
-}
-async function unseal(box, pw) {
-  const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(box.iv) }, await keyOf(pw, unb64(box.salt)), unb64(box.data));
-  return JSON.parse(_dec.decode(pt));
-}
+<script type="module">
+import { firebaseConfig, ADMIN_EMAILS } from "./firebase-config.js";
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, doc, query, where, onSnapshot, setDoc, updateDoc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const $ = (s, r = document) => r.querySelector(s);
 function h(tag, attrs, ...kids) {
@@ -243,17 +245,25 @@ function h(tag, attrs, ...kids) {
 
 /* ---------- 상태 ---------- */
 const S = {
-  data: null, loadErr: false,
-  admin: null, adminPw: null, dirty: 0,   // 관리자 모드에서 고친 내용은 data.json을 내려받아 GitHub에 올려야 반영된다
-  open: {},                                // 과제 id → 비밀번호로 연 내용 (이 탭에서만 유지)
-  year: null, cal: null,
+  configured: false, authReady: false, user: null, isAdmin: false,
+  projects: [], todos: {}, events: {}, links: [], types: null,
+  loaded: { projects: false, links: false }, denied: false, redirected: false,
+  year: null, cal: null, filter: "전체",
 };
-const hasCrypto = !!(window.crypto && crypto.subtle);
+let auth = null, db = null;
+const subs = { base: [], per: {} };
 const TYPES = ["기본연구", "현안연구", "수탁연구", "협동연구", "기타"];
 const ROLES = ["연구책임자", "공동연구원", "연구보조원", "자문위원"];
 const GROUPS = ["협업 도구", "소속 기관", "문헌·선행연구", "교육과정·정책", "통계·데이터", "연구윤리·규정"];
 const ROOM_GROUPS = ["협업", "기관", "자료", "기타"];
 const WEEK = ["일", "월", "화", "수", "목", "금", "토"];
+const SEED_LINKS = [
+  ["Dropbox", "https://www.dropbox.com/home", "협업 도구"], ["Google Drive", "https://drive.google.com", "협업 도구"],
+  ["경기도교육청", "https://www.goe.go.kr", "소속 기관"], ["경기도교육연구원", "https://www.gie.re.kr", "소속 기관"],
+  ["RISS", "https://www.riss.kr", "문헌·선행연구"], ["KCI 한국학술지인용색인", "https://www.kci.go.kr", "문헌·선행연구"], ["NKIS 국가정책연구포털", "https://www.nkis.re.kr", "문헌·선행연구"], ["PRISM 정책연구관리시스템", "https://www.prism.go.kr", "문헌·선행연구"],
+  ["NCIC 국가교육과정정보센터", "https://ncic.re.kr", "교육과정·정책"], ["교육부", "https://www.moe.go.kr", "교육과정·정책"], ["한국교육개발원", "https://www.kedi.re.kr", "교육과정·정책"], ["한국교육과정평가원", "https://www.kice.re.kr", "교육과정·정책"],
+  ["KESS 교육통계서비스", "https://kess.kedi.re.kr", "통계·데이터"], ["학교알리미", "https://www.schoolinfo.go.kr", "통계·데이터"], ["EDSS 교육데이터플랫폼", "https://edss.moe.go.kr", "통계·데이터"], ["KOSIS 국가통계포털", "https://kosis.kr", "통계·데이터"],
+  ["공용기관생명윤리위원회", "https://public.irb.or.kr", "연구윤리·규정"], ["KCI 문헌 유사도 검사", "https://check.kci.go.kr", "연구윤리·규정"], ["국가법령정보센터", "https://www.law.go.kr", "연구윤리·규정"]];
 
 /* ---------- 도우미 ---------- */
 const D = s => { if (!/^\d{4}-\d{2}-\d{2}$/.test(s || "")) return null; const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); };
@@ -267,6 +277,9 @@ const timeOf = e => e.time ? (e.endTime ? `${e.time}~${e.endTime}` : e.time) : "
 const newId = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 const safeUrl = u => { try { const x = new URL(String(u || "").trim()); return (x.protocol === "https:" || x.protocol === "http:") ? x.href : ""; } catch { return ""; } };
 const host = u => { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return ""; } };
+const normEmail = e => String(e || "").trim().toLowerCase();
+const validEmail = e => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+const me = () => (S.user ? S.user.email : "");
 function status(p) {
   const s = D(p.start), e = D(p.end), t = today();
   if (!s || !e) return { key: "tbd", label: "기간 미정", note: "" };
@@ -274,18 +287,22 @@ function status(p) {
   if (t > e) return { key: "done", label: "종료", note: "" };
   return { key: "live", label: "진행 중", note: `${days(t, e)}일 남음` };
 }
-const typesList = () => (S.admin && Array.isArray(S.admin.types) && S.admin.types.length ? S.admin.types : TYPES);
+const typesList = () => (Array.isArray(S.types) && S.types.length ? S.types : TYPES);
 function typeColor(type) {
-  const base = typesList(), extra = S.admin ? [...new Set(S.admin.projects.map(p => p.type || "기타"))].filter(x => !base.includes(x)).sort() : [];
-  const all = [...base, ...extra];
-  return `var(--t${(Math.max(0, all.indexOf(type || "기타")) % 5) + 1})`;
+  const base = typesList(), extra = [...new Set(S.projects.map(p => p.type || "기타"))].filter(x => !base.includes(x)).sort();
+  return `var(--t${(Math.max(0, [...base, ...extra].indexOf(type || "기타")) % 5) + 1})`;
 }
 function tileColor(label) { let n = 0; for (const ch of String(label)) n = (n * 31 + ch.codePointAt(0)) % 997; return `var(--t${n % 5 + 1})`; }
 const tile = label => h("span", { class: "tile", style: `--c:${tileColor(label)}`, "aria-hidden": "true" }, [...String(label).trim()][0] || "·");
 const sortEvents = list => [...(list || [])].sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+const whoName = (p, email) => !email ? "전체" : ((p.members || []).find(m => normEmail(m.email) === email) || {}).name || email;
+const isMine = t => !t.assignee || t.assignee === me();
 let toastT;
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 5000); }
-function changed() { S.dirty++; render(); }
+async function save(what, fn) {
+  try { await fn(); return true; }
+  catch (e) { console.error(e); toast(e && e.code === "permission-denied" ? `${what}하지 못했습니다. 이 작업을 할 권한이 없습니다.` : `${what}하지 못했습니다. 연결 상태를 확인하고 다시 시도해 주세요.`); return false; }
+}
 
 /* ---------- 대화상자 ---------- */
 function openDlg(node, narrow) { const d = $("#dlg"); d.className = narrow ? "narrow" : ""; d.replaceChildren(node); if (!d.open) d.showModal(); }
@@ -294,8 +311,7 @@ function ask(message, okLabel) {
   return new Promise(res => {
     const d = $("#cfm");
     const done = v => { d.close(); d.replaceChildren(); res(v); };
-    d.replaceChildren(h("div", { class: "dlg" },
-      h("p", { style: "margin:0" }, message),
+    d.replaceChildren(h("div", { class: "dlg" }, h("p", { style: "margin:0" }, message),
       h("div", { class: "row", style: "justify-content:flex-end" },
         h("button", { class: "btn", type: "button", onclick: () => done(false) }, "취소"),
         h("button", { class: "btn primary", type: "button", onclick: () => done(true) }, okLabel))));
@@ -311,88 +327,47 @@ function dlgFoot(errEl, okLabel, onDelete) {
       h("button", { class: "btn", type: "button", onclick: closeDlg }, "취소"),
       h("button", { class: "btn primary", type: "submit" }, okLabel)));
 }
-function needCrypto() { if (hasCrypto) return true; toast("이 주소에서는 비밀번호 기능을 쓸 수 없습니다. https 주소(GitHub Pages)로 열어 주세요."); return false; }
+const busy = (form, on) => { const b = form.querySelector("[type=submit]"); if (b) b.disabled = on; };
 
-/* ---------- 관리자 로그인·설정 ---------- */
-function adminDialog() {
-  if (!needCrypto()) return;
-  const first = !S.data.admin;
-  const pw = h("input", { type: "password", autocomplete: first ? "new-password" : "current-password", required: true });
-  const pw2 = h("input", { type: "password", autocomplete: "new-password" });
-  const err = h("div", { class: "err" });
-  const form = h("form", { class: "dlg", onsubmit: async ev => {
-    ev.preventDefault(); err.textContent = "";
-    const btn = form.querySelector("[type=submit]");
-    if (first) {
-      if (pw.value.length < 8) { err.textContent = "관리자 비밀번호는 8자 이상으로 정해 주세요."; return; }
-      if (pw.value !== pw2.value) { err.textContent = "두 비밀번호가 서로 다릅니다."; return; }
-      S.admin = { projects: [] }; S.adminPw = pw.value; closeDlg(); changed();
-      toast("관리자 비밀번호를 정했습니다. 과제를 추가한 뒤 data.json을 내려받아 GitHub에 올려 주세요.");
-      return;
-    }
-    btn.disabled = true;
-    try { S.admin = await unseal(S.data.admin, pw.value); S.adminPw = pw.value; closeDlg(); render(); }
-    catch { btn.disabled = false; err.textContent = "비밀번호가 맞지 않습니다."; pw.select(); }
-  } },
-    h("h2", null, first ? "관리자 비밀번호 정하기" : "관리자 로그인"),
-    first ? h("div", { class: "help" }, "처음 한 번만 정합니다. 이 비밀번호로 과제 추가·수정과 연간 일정표를 엽니다. 어디에도 따로 저장되지 않으니 꼭 적어 두세요. 잊으면 관리자 자료를 되살릴 수 없습니다.") : null,
-    field("관리자 비밀번호", "a-pw", pw),
-    first ? field("한 번 더 입력", "a-pw2", pw2) : null,
-    err,
-    h("div", { class: "row", style: "justify-content:flex-end" },
-      h("button", { class: "btn", type: "button", onclick: closeDlg }, "취소"),
-      h("button", { class: "btn primary", type: "submit" }, first ? "정하기" : "로그인")));
-  openDlg(form, true); pw.focus();
-}
-function changeAdminPw() {
-  const pw = h("input", { type: "password", autocomplete: "new-password", required: true });
-  const pw2 = h("input", { type: "password", autocomplete: "new-password", required: true });
-  const err = h("div", { class: "err" });
-  openDlg(h("form", { class: "dlg", onsubmit: ev => {
-    ev.preventDefault();
-    if (pw.value.length < 8) { err.textContent = "8자 이상으로 정해 주세요."; return; }
-    if (pw.value !== pw2.value) { err.textContent = "두 비밀번호가 서로 다릅니다."; return; }
-    S.adminPw = pw.value; closeDlg(); changed(); toast("새 비밀번호는 data.json을 올린 뒤부터 적용됩니다.");
-  } }, h("h2", null, "관리자 비밀번호 변경"), field("새 비밀번호", "c-pw", pw), field("한 번 더 입력", "c-pw2", pw2), err, dlgFoot(h("span"), "변경")), true);
-}
-async function exportData(btn) {
-  if (!S.admin) return;
-  if (btn) { btn.disabled = true; btn.textContent = "만드는 중…"; }
-  try {
-    const rooms = [];
-    for (const p of S.admin.projects) { const { password, ...content } = p; rooms.push({ id: p.id, title: p.title, ...(await seal(content, password)) }); }
-    const out = { v: 1, updated: new Date().toISOString(), links: S.data.links || [], rooms, admin: await seal({ projects: S.admin.projects, types: typesList() }, S.adminPw) };
-    const a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(out, null, 1)], { type: "application/json" })), download: "data.json" });
-    document.body.append(a); a.click(); a.remove();
-    S.data = out; S.dirty = 0; render();
-    toast("data.json을 내려받았습니다. GitHub 저장소에 올려 기존 파일을 바꾸면 사이트에 반영됩니다.");
-  } catch { toast("data.json을 만들지 못했습니다. 다시 시도해 주세요."); render(); }
+/* ---------- 로그인 ---------- */
+async function login() {
+  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+  catch (e) {
+    const c = e && e.code;
+    if (c === "auth/popup-closed-by-user" || c === "auth/cancelled-popup-request") return;
+    toast(c === "auth/unauthorized-domain" ? "이 주소가 Firebase의 승인된 도메인에 없습니다. README의 3단계를 확인해 주세요."
+      : c === "auth/popup-blocked" ? "브라우저가 로그인 창을 막았습니다. 팝업을 허용한 뒤 다시 눌러 주세요."
+      : c === "auth/operation-not-allowed" ? "Firebase에서 Google 로그인이 켜져 있지 않습니다. README의 3단계를 확인해 주세요."
+      : "로그인하지 못했습니다. 다시 시도해 주세요.");
+  }
 }
 
-/* ---------- 비밀번호로 과제 열기 ---------- */
-function enterRoom(room, tab) {
-  const go = () => { const hsh = "p-" + room.id + (tab ? "-cal" : ""); if (location.hash === "#" + hsh) render(); else location.hash = hsh; };
-  if (S.admin || S.open[room.id]) { go(); return; }
-  if (!needCrypto()) return;
-  const pw = h("input", { type: "password", autocomplete: "off", required: true });
-  const err = h("div", { class: "err" });
-  const form = h("form", { class: "dlg", onsubmit: async ev => {
-    ev.preventDefault(); err.textContent = "";
-    const btn = form.querySelector("[type=submit]"); btn.disabled = true;
-    try { S.open[room.id] = await unseal(room, pw.value); closeDlg(); go(); }
-    catch { btn.disabled = false; err.textContent = "비밀번호가 맞지 않습니다."; pw.select(); }
-  } },
-    h("h2", null, room.title), field("과제 비밀번호", "pw-in", pw), err,
-    h("div", { class: "row", style: "justify-content:flex-end" },
-      h("button", { class: "btn", type: "button", onclick: closeDlg }, "취소"),
-      h("button", { class: "btn primary", type: "submit" }, "들어가기")));
-  openDlg(form, true); pw.focus();
+/* ---------- 실시간 자료 구독 ---------- */
+function stopAll() { subs.base.forEach(u => u()); subs.base = []; Object.values(subs.per).forEach(a => a.forEach(u => u())); subs.per = {}; }
+function onDenied(e) { console.error(e); if (e && e.code === "permission-denied") { S.denied = true; S.loaded.projects = true; render(); } }
+function watchProjects() {
+  const col = collection(db, "projects");
+  const q = S.isAdmin ? col : query(col, where("memberEmails", "array-contains", me()));
+  subs.base.push(onSnapshot(q, snap => {
+    S.projects = snap.docs.map(d => ({ ...d.data(), id: d.id })); S.loaded.projects = true; S.denied = false;
+    const ids = new Set(S.projects.map(p => p.id));
+    for (const id of Object.keys(subs.per)) if (!ids.has(id)) { subs.per[id].forEach(u => u()); delete subs.per[id]; delete S.todos[id]; delete S.events[id]; }
+    for (const id of ids) if (!subs.per[id]) subs.per[id] = ["todos", "events"].map(key =>
+      onSnapshot(collection(db, "projects", id, key), s => { S[key][id] = s.docs.map(d => ({ ...d.data(), id: d.id })); render(); }, onDenied));
+    // 참여 과제가 하나뿐이면 첫 화면을 건너뛰고 그 과제로 바로 이동
+    if (!S.isAdmin && !S.redirected && S.projects.length === 1 && !/^#p-/.test(location.hash)) { S.redirected = true; location.hash = "p-" + S.projects[0].id; return; }
+    S.redirected = true; render();
+  }, onDenied));
+  subs.base.push(onSnapshot(doc(db, "meta", "types"), s => { S.types = s.exists() ? s.data().list : null; render(); }, () => {}));
+}
+function watchLinks() {
+  return onSnapshot(collection(db, "links"), snap => { S.links = snap.docs.map(d => ({ ...d.data(), id: d.id })); S.loaded.links = true; render(); }, e => { S.loaded.links = true; onDenied(e); });
 }
 
 /* ---------- 과제 편집 (관리자) ---------- */
 function editProject(p) {
   const isNew = !p;
-  p = p || { type: typesList()[0], milestones: [], members: [], events: [], links: [
+  p = p || { type: typesList()[0], milestones: [], members: [], links: [
     { group: "협업", label: "Dropbox 폴더", url: "" }, { group: "협업", label: "Google Drive 폴더", url: "" },
     { group: "기관", label: "경기도교육청", url: "https://www.goe.go.kr" }, { group: "기관", label: "경기도교육연구원", url: "https://www.gie.re.kr" }] };
   const y = S.year;
@@ -401,14 +376,14 @@ function editProject(p) {
   const type = h("select", null, typeOpts.map(o => h("option", { value: o }, o))); type.value = p.type || typeOpts[0];
   const start = h("input", { type: "date", value: p.start || (isNew ? `${y}-01-01` : "") });
   const end = h("input", { type: "date", value: p.end || (isNew ? `${y}-12-31` : "") });
-  const pw = h("input", { type: "text", autocomplete: "off", value: p.password || "", maxlength: 64, placeholder: "6자 이상" });
   const notice = h("textarea", { maxlength: 1500 }); notice.value = p.notice || "";
   const mBox = h("div", { class: "stack", style: "gap:8px" }), lBox = h("div", { class: "stack", style: "gap:8px" }), sBox = h("div", { class: "stack", style: "gap:8px" });
   const rm = row => h("button", { class: "btn quiet", type: "button", onclick: () => row.remove() }, "지우기");
   const addMember = m => { const row = h("div", { class: "subrow" },
-      h("input", { type: "text", placeholder: "이름", value: m.name || "", "data-k": "name", maxlength: 40, "aria-label": "이름" }),
-      h("input", { type: "text", placeholder: "역할", value: m.role || "", list: "roles", "data-k": "role", maxlength: 30, "aria-label": "역할" }),
-      h("input", { type: "text", placeholder: "소속", value: m.org || "", "data-k": "org", maxlength: 60, "aria-label": "소속" }));
+      h("input", { type: "text", placeholder: "이름", value: m.name || "", "data-k": "name", maxlength: 40, "aria-label": "이름", style: "flex:1 1 90px;min-width:90px" }),
+      h("input", { type: "text", placeholder: "Google 계정 메일", value: m.email || "", "data-k": "email", maxlength: 120, "aria-label": "Google 계정 메일", style: "flex:2 1 180px" }),
+      h("input", { type: "text", placeholder: "역할", value: m.role || "", list: "roles", "data-k": "role", maxlength: 30, "aria-label": "역할", style: "flex:1 1 90px;min-width:90px" }),
+      h("input", { type: "text", placeholder: "소속", value: m.org || "", "data-k": "org", maxlength: 60, "aria-label": "소속", style: "flex:1 1 110px" }));
     row.append(rm(row)); mBox.append(row); };
   const addLink = l => { const row = h("div", { class: "subrow" },
       h("input", { type: "text", placeholder: "묶음", value: l.group || "협업", list: "rgroups", "data-k": "group", maxlength: 20, "aria-label": "묶음", style: "flex:0 0 84px;min-width:84px" }),
@@ -417,49 +392,54 @@ function editProject(p) {
     row.append(rm(row)); lBox.append(row); };
   const addMs = m => { const row = h("div", { class: "subrow" },
       h("input", { type: "date", value: m.date || "", "data-k": "date", "aria-label": "날짜" }),
-      h("input", { type: "text", placeholder: "예: 중간보고", value: m.label || "", "data-k": "label", maxlength: 60, "aria-label": "일정 이름" }),
+      h("input", { type: "text", placeholder: "예: 중간보고서 제출", value: m.label || "", "data-k": "label", maxlength: 60, "aria-label": "일정 이름" }),
       h("label", { class: "small row", style: "gap:4px" }, h("input", { type: "checkbox", checked: !!m.done, "data-k": "done" }), "완료"));
     row.append(rm(row)); sBox.append(row); };
   (p.members || []).forEach(addMember); (p.links || []).forEach(addLink); (p.milestones || []).forEach(addMs);
   const err = h("span", { class: "err" });
-  const form = h("form", { class: "dlg", onsubmit: ev => {
+  const form = h("form", { class: "dlg", onsubmit: async ev => {
     ev.preventDefault(); err.textContent = "";
     if (!title.value.trim()) { err.textContent = "과제명을 입력해 주세요."; return; }
     if (start.value && end.value && end.value < start.value) { err.textContent = "종료일이 시작일보다 빠릅니다."; return; }
-    if (pw.value.length < 6) { err.textContent = "과제 비밀번호를 6자 이상으로 정해 주세요."; pw.focus(); return; }
     const rows = (box, keys) => [...box.children].map(r => Object.fromEntries(keys.map(k => { const i = r.querySelector(`[data-k="${k}"]`); return [k, i.type === "checkbox" ? i.checked : i.value.trim()]; })));
+    const members = rows(mBox, ["name", "email", "role", "org"]).filter(m => m.name || m.email).map(m => ({ ...m, email: normEmail(m.email) }));
+    const bad = members.find(m => m.email && !validEmail(m.email));
+    if (bad) { err.textContent = `메일 주소를 확인해 주세요: ${bad.email}`; return; }
     const rawLinks = rows(lBox, ["group", "label", "url"]).filter(l => l.label && l.url);
     if (rawLinks.some(l => !safeUrl(l.url))) { err.textContent = "도구 주소는 https:// 로 시작해야 합니다."; return; }
-    const full = {
-      id: p.id || "p" + newId(), title: title.value.trim(), type: type.value.trim() || "기타", start: start.value, end: end.value,
-      notice: notice.value.trim(), password: pw.value,
+    const id = p.id || "p" + newId();
+    const data = {
+      title: title.value.trim(), type: type.value, start: start.value, end: end.value, notice: notice.value.trim(),
       links: rawLinks.map(l => ({ group: l.group || "기타", label: l.label, url: safeUrl(l.url) })),
-      members: rows(mBox, ["name", "role", "org"]).filter(m => m.name),
+      members, memberEmails: [...new Set(members.map(m => m.email).filter(Boolean))],   // 이 목록에 있는 메일만 과제를 열 수 있다 (보안 규칙이 확인)
       milestones: rows(sBox, ["date", "label", "done"]).filter(m => m.label).sort((a, b) => (a.date || "9").localeCompare(b.date || "9")),
-      events: p.events || [],
+      createdAt: p.createdAt || new Date().toISOString(),
     };
-    const i = S.admin.projects.findIndex(x => x.id === full.id);
-    if (i < 0) S.admin.projects.push(full); else S.admin.projects[i] = full;
-    closeDlg(); changed();
+    busy(form, true);
+    if (await save("과제를 저장", () => setDoc(doc(db, "projects", id), data))) { closeDlg(); toast("과제를 저장했습니다."); } else busy(form, false);
   } },
     h("h2", null, isNew ? "과제 추가" : "과제 수정"),
-    field("과제명 (비밀번호 없이도 목록에 보입니다)", "f-title", title),
+    field("과제명", "f-title", title),
     h("div", { class: "row", style: "align-items:flex-start" }, field("과제 유형", "f-type", type), field("연구 시작일", "f-start", start), field("연구 종료일", "f-end", end)),
-    field("과제 비밀번호 (공동연구진에게 알려 줄 것)", "f-pw", pw),
-    h("div", { class: "help" }, "이 비밀번호를 아는 사람은 과제의 안내·도구·일정·달력·연구진 명단을 볼 수 있습니다. 사이트 파일이 공개되므로 짧은 숫자보다 문자와 숫자를 섞어 길게 정해 주세요."),
     field("참여자 안내 (선택)", "f-notice", notice),
     h("div", { class: "stack", style: "gap:8px" }, h("span", { class: "flabel" }, "공동연구진"), mBox,
       h("div", null, h("button", { class: "btn", type: "button", onclick: () => addMember({}) }, "연구진 추가"))),
+    h("div", { class: "help" }, "여기에 적은 Google 계정 메일로 로그인한 사람만 이 과제를 볼 수 있습니다. 메일을 비워 두면 명단에는 보이지만 그 사람은 들어올 수 없습니다. 관리자는 명단에 없어도 모든 과제를 봅니다."),
     h("div", { class: "stack", style: "gap:8px" }, h("span", { class: "flabel" }, "이 과제의 도구·폴더 (주소가 빈 줄은 저장되지 않습니다)"), lBox,
       h("div", null, h("button", { class: "btn", type: "button", onclick: () => addLink({}) }, "도구 추가"))),
-    h("div", { class: "stack", style: "gap:8px" }, h("span", { class: "flabel" }, "주요 일정 (착수·중간·최종보고 등)"), sBox,
+    h("div", { class: "stack", style: "gap:8px" }, h("span", { class: "flabel" }, "마감·주요 일정 (착수·중간·최종보고, 보고서 제출 등)"), sBox,
       h("div", null, h("button", { class: "btn", type: "button", onclick: () => addMs({}) }, "일정 추가"))),
-    h("div", { class: "help" }, "회의 일정은 과제의 ‘달력’ 화면에서 날짜를 눌러 넣습니다."),
     h("datalist", { id: "roles" }, ROLES.map(t => h("option", { value: t }))),
     h("datalist", { id: "rgroups" }, ROOM_GROUPS.map(t => h("option", { value: t }))),
-    dlgFoot(err, "확인", isNew ? null : async () => {
-      if (!await ask(`「${p.title}」 과제를 삭제할까요? 달력 일정과 연구진 명단도 함께 지워집니다.`, "과제 삭제")) return;
-      S.admin.projects = S.admin.projects.filter(x => x.id !== p.id); closeDlg(); location.hash = "home"; changed();
+    dlgFoot(err, "저장", isNew ? null : async () => {
+      if (!await ask(`「${p.title}」 과제를 삭제할까요? 달력 일정과 할 일도 함께 지워지며 되돌릴 수 없습니다.`, "과제 삭제")) return;
+      const ok = await save("과제를 삭제", async () => {
+        const b = writeBatch(db);
+        (S.todos[p.id] || []).forEach(t => b.delete(doc(db, "projects", p.id, "todos", t.id)));
+        (S.events[p.id] || []).forEach(e => b.delete(doc(db, "projects", p.id, "events", e.id)));
+        b.delete(doc(db, "projects", p.id)); await b.commit();
+      });
+      if (ok) { closeDlg(); location.hash = "home"; toast("과제를 삭제했습니다."); }
     }));
   openDlg(form);
 }
@@ -467,7 +447,7 @@ function editProject(p) {
 /* ---------- 과제 유형 관리 (관리자) ---------- */
 function manageTypes() {
   const box = h("div", { class: "stack", style: "gap:8px" });
-  const count = name => S.admin.projects.filter(p => p.type === name).length;
+  const count = name => S.projects.filter(p => p.type === name).length;
   const add = (name, old) => { const row = h("div", { class: "subrow" },
       h("input", { type: "text", value: name, maxlength: 30, placeholder: "유형 이름", "aria-label": "유형 이름", "data-old": old || "" }),
       h("span", { class: "small muted num", style: "flex:0 0 64px" }, old ? `과제 ${count(old)}건` : "새 유형"),
@@ -475,27 +455,110 @@ function manageTypes() {
     box.append(row); return row; };
   typesList().forEach(t => add(t, t));
   const err = h("span", { class: "err" });
-  openDlg(h("form", { class: "dlg", onsubmit: ev => {
+  const form = h("form", { class: "dlg", onsubmit: async ev => {
     ev.preventDefault(); err.textContent = "";
     const rows = [...box.querySelectorAll("input")].map(i => ({ name: i.value.trim(), old: i.getAttribute("data-old") })).filter(r => r.name);
     const names = rows.map(r => r.name);
     if (!names.length) { err.textContent = "유형을 하나 이상 남겨 주세요."; return; }
     if (new Set(names).size !== names.length) { err.textContent = "같은 이름의 유형이 있습니다."; return; }
     const renames = rows.filter(r => r.old && r.old !== r.name);
-    S.admin.projects.forEach(p => { const r = renames.find(x => x.old === p.type); if (r) p.type = r.name; });   // 이름을 바꾸면 그 유형의 과제도 함께 바뀐다
-    S.admin.types = names; closeDlg(); changed();
+    busy(form, true);
+    const ok = await save("유형을 저장", async () => {
+      const b = writeBatch(db); b.set(doc(db, "meta", "types"), { list: names });
+      S.projects.forEach(p => { const r = renames.find(x => x.old === p.type); if (r) b.update(doc(db, "projects", p.id), { type: r.name }); });
+      await b.commit();
+    });
+    if (ok) closeDlg(); else busy(form, false);
   } },
     h("h2", null, "과제 유형 관리"),
-    h("div", { class: "help" }, "이름을 고치면 그 유형으로 지정된 과제도 함께 바뀝니다. 목록에서 지운 유형으로 지정돼 있던 과제는 기존 유형 이름을 그대로 유지하니, 필요하면 ‘과제 수정’에서 다른 유형으로 바꿔 주세요. 목록 순서대로 일정표 색이 정해집니다."),
-    box,
-    h("div", null, h("button", { class: "btn", type: "button", onclick: () => add("", "").querySelector("input").focus() }, "유형 추가")),
-    dlgFoot(err, "확인")), true);
+    h("div", { class: "help" }, "이름을 고치면 그 유형의 과제도 함께 바뀝니다. 목록에서 지운 유형의 과제는 기존 이름을 유지합니다."),
+    box, h("div", null, h("button", { class: "btn", type: "button", onclick: () => add("", "").querySelector("input").focus() }, "유형 추가")),
+    dlgFoot(err, "저장"));
+  openDlg(form, true);
 }
 
-/* ---------- 달력 일정 ---------- */
+/* ---------- 할 일 ---------- */
+async function toggleTodo(p, t, on) {
+  await save("할 일을 바꾸", () => updateDoc(doc(db, "projects", p.id, "todos", t.id), { done: on, doneBy: on ? me() : "", doneAt: on ? new Date().toISOString() : "" }));
+}
+function todoDialog(p, t) {
+  const isNew = !t; t = t || {};
+  const title = h("input", { type: "text", value: t.title || "", required: true, maxlength: 100, placeholder: "예: 설문 문항 초안 작성" });
+  const due = h("input", { type: "date", value: t.due || "" });
+  const who = h("select", null, h("option", { value: "" }, "연구진 전체"), (p.members || []).filter(m => m.email).map(m => h("option", { value: normEmail(m.email) }, `${m.name || m.email}`)));
+  who.value = t.assignee || "";
+  const memo = h("textarea", { maxlength: 600 }); memo.value = t.memo || "";
+  const err = h("span", { class: "err" });
+  const form = h("form", { class: "dlg", onsubmit: async ev => {
+    ev.preventDefault();
+    if (!title.value.trim()) { err.textContent = "할 일을 입력해 주세요."; return; }
+    const item = { title: title.value.trim(), due: due.value, assignee: who.value, memo: memo.value.trim(), done: !!t.done, doneBy: t.doneBy || "", doneAt: t.doneAt || "", createdAt: t.createdAt || new Date().toISOString() };
+    busy(form, true);
+    if (await save("할 일을 저장", () => setDoc(doc(db, "projects", p.id, "todos", t.id || "t" + newId()), item))) closeDlg(); else busy(form, false);
+  } },
+    h("h2", null, isNew ? "할 일 추가" : "할 일 수정"),
+    field("할 일", "t-title", title),
+    h("div", { class: "row", style: "align-items:flex-start" }, field("마감일 (선택)", "t-due", due), field("담당", "t-who", who)),
+    field("메모 (선택)", "t-memo", memo),
+    dlgFoot(err, "저장", isNew ? null : async () => { if (await save("할 일을 삭제", () => deleteDoc(doc(db, "projects", p.id, "todos", t.id)))) closeDlg(); }));
+  openDlg(form);
+}
+function todoRow(p, t, showProject) {
+  const tdy = iso(today()), late = !t.done && t.due && t.due < tdy;
+  const can = S.isAdmin || isMine(t);
+  return h("li", { class: "todo" + (t.done ? " done" : "") },
+    h("input", { type: "checkbox", checked: !!t.done, disabled: !can, "aria-label": `${t.title} 완료`, onchange: ev => toggleTodo(p, t, ev.target.checked) }),
+    h("span", { style: "flex:1;min-width:0" },
+      h("span", { class: "ttitle" }, t.title),
+      h("span", { class: "small muted", style: "display:block" }, [showProject ? p.title : null, "담당 " + whoName(p, t.assignee), t.done && t.doneBy ? `완료: ${whoName(p, t.doneBy)}` : null].filter(Boolean).join(" · ")),
+      t.memo ? h("span", { class: "small", style: "display:block;white-space:pre-wrap" }, t.memo) : null),
+    t.due ? h("span", { class: "due num" + (late ? " late" : "") }, late ? `${fmtDay(t.due)} · ${days(D(t.due), today())}일 지남` : fmtDay(t.due)) : h("span", { class: "due muted" }, "기한 없음"),
+    S.isAdmin ? h("button", { class: "btn quiet small", type: "button", onclick: () => todoDialog(p, t) }, "수정") : null);
+}
+const sortTodos = list => [...list].sort((a, b) => (a.done - b.done) || (a.due || "9999").localeCompare(b.due || "9999") || (a.createdAt || "").localeCompare(b.createdAt || ""));
+function todosView(p) {
+  const all = sortTodos(S.todos[p.id] || []);
+  const mine = all.filter(isMine), others = all.filter(t => !isMine(t));
+  const sec = (title, list, empty) => h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `${title} ${list.filter(t => !t.done).length}건`),
+    list.length ? h("ul", { class: "list" }, list.map(t => todoRow(p, t))) : h("div", { class: "muted small" }, empty));
+  return h("div", { class: "stack" },
+    S.isAdmin ? h("div", null, h("button", { class: "btn primary", type: "button", onclick: () => todoDialog(p, null) }, "할 일 추가")) : null,
+    S.isAdmin ? sec("남은 할 일", all, "등록된 할 일이 없습니다. ‘할 일 추가’로 담당자와 마감일을 정해 주세요.")
+      : [sec("내 할 일", mine, "나에게 배정된 할 일이 없습니다."), others.length ? sec("다른 연구진의 할 일", others, "") : null]);
+}
+
+/* ---------- 전체 마감·할 일 (첫 화면) ---------- */
+function agenda() {
+  const t = today(), tdy = iso(t), soon = iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() + 7));
+  const items = [];
+  for (const p of S.projects) {
+    (p.milestones || []).forEach(m => { if (!m.done && m.date) items.push({ kind: "마감", date: m.date, title: m.label, p }); });
+    (S.todos[p.id] || []).forEach(x => { if (!x.done && (S.isAdmin || isMine(x))) items.push({ kind: "할 일", date: x.due || "", title: x.title, p, todo: x }); });
+    (S.events[p.id] || []).forEach(e => { if (e.date >= tdy) items.push({ kind: "회의", date: e.date, time: e.time || "", title: e.title, p, ev: e }); });
+  }
+  const kinds = ["전체", "마감", "할 일", "회의"];
+  const shown = items.filter(i => S.filter === "전체" || i.kind === S.filter).sort((a, b) => ((a.date || "9999") + (a.time || "")).localeCompare((b.date || "9999") + (b.time || "")));
+  const groups = [["기한 지남", shown.filter(i => i.date && i.date < tdy)], ["오늘부터 7일 이내", shown.filter(i => i.date >= tdy && i.date <= soon)], ["그 이후", shown.filter(i => i.date > soon)], ["기한 없음", shown.filter(i => !i.date)]];
+  const row = i => h("li", { class: "todo" },
+    i.todo ? h("input", { type: "checkbox", "aria-label": `${i.title} 완료`, onchange: ev => toggleTodo(i.p, i.todo, ev.target.checked) }) : h("span", { style: "flex:0 0 18px" }),
+    h("span", { class: "kind k-" + (i.kind === "마감" ? "ms" : i.kind === "회의" ? "ev" : "td") }, i.kind),
+    h("span", { style: "flex:1;min-width:0" }, h("span", { class: "ttitle" }, i.title),
+      h("a", { class: "small", style: "display:block", href: "#p-" + i.p.id + (i.kind === "회의" ? "-cal" : i.kind === "할 일" ? "-todo" : "") },
+        [i.p.title, i.todo ? "담당 " + whoName(i.p, i.todo.assignee) : null, i.ev ? [timeOf(i.ev), i.ev.place].filter(Boolean).join(" · ") : null].filter(Boolean).join(" · "))),
+    i.date ? h("span", { class: "due num" + (i.date < tdy ? " late" : "") }, i.date < tdy ? `${fmtDay(i.date)} · ${days(D(i.date), t)}일 지남` : i.date === tdy ? "오늘" : `${fmtDay(i.date)} · ${days(t, D(i.date))}일 뒤`) : null);
+  return h("section", { class: "panel stack", style: "gap:12px" },
+    h("div", { class: "row spread" },
+      h("div", null, h("h2", null, S.isAdmin ? "전체 마감·할 일" : "내 할 일과 일정"),
+        h("div", { class: "small muted" }, S.isAdmin ? "모든 과제의 마감, 끝나지 않은 할 일, 다가오는 회의입니다." : "내가 참여하는 과제의 마감, 나에게 배정된 할 일, 다가오는 회의입니다.")),
+      h("div", { class: "filters" }, kinds.map(k => h("button", { type: "button", "aria-pressed": String(S.filter === k), onclick: () => { S.filter = k; render(); } }, k === "전체" ? `전체 ${items.length}` : `${k} ${items.filter(i => i.kind === k).length}`)))),
+    shown.length ? groups.filter(g => g[1].length).map(([name, list]) => h("div", { class: "stack", style: "gap:2px" },
+      h("div", { class: "gname" + (name === "기한 지남" ? " late" : "") }, `${name} ${list.length}건`), h("ul", { class: "list" }, list.map(row))))
+      : h("div", { class: "muted small" }, "표시할 항목이 없습니다."));
+}
+
+/* ---------- 달력 ---------- */
 function eventDialog(p, ev, date) {
-  const admin = !!S.admin;
-  if (ev && !admin) {   // 참여자는 보기만
+  if (ev && !S.isAdmin) {
     openDlg(h("div", { class: "dlg" }, h("h2", null, ev.title),
       h("ul", { class: "list" },
         h("li", null, h("span", { class: "when" }, "날짜"), h("span", null, fmtDay(ev.date))),
@@ -512,48 +575,45 @@ function eventDialog(p, ev, date) {
   const place = h("input", { type: "text", value: ev.place || "", maxlength: 100, placeholder: "예: 연구원 3층 회의실, 온라인(Zoom)" });
   const memo = h("textarea", { maxlength: 600 }); memo.value = ev.memo || "";
   const err = h("span", { class: "err" });
-  openDlg(h("form", { class: "dlg", onsubmit: e => {
+  const form = h("form", { class: "dlg", onsubmit: async e => {
     e.preventDefault();
     if (!title.value.trim() || !d.value) { err.textContent = "일정 이름과 날짜를 입력해 주세요."; return; }
     if (t1.value && t2.value && t2.value < t1.value) { err.textContent = "끝나는 시간이 시작 시간보다 빠릅니다."; return; }
-    const item = { id: ev.id || "e" + newId(), title: title.value.trim(), date: d.value, time: t1.value, endTime: t1.value ? t2.value : "", place: place.value.trim(), memo: memo.value.trim() };
-    p.events = (p.events || []).filter(x => x.id !== item.id).concat(item);
-    const dd = D(item.date); S.cal = { y: dd.getFullYear(), m: dd.getMonth() };
-    closeDlg(); changed();
+    const item = { title: title.value.trim(), date: d.value, time: t1.value, endTime: t1.value ? t2.value : "", place: place.value.trim(), memo: memo.value.trim() };
+    busy(form, true);
+    if (await save("일정을 저장", () => setDoc(doc(db, "projects", p.id, "events", ev.id || "e" + newId()), item))) { const dd = D(item.date); S.cal = { y: dd.getFullYear(), m: dd.getMonth() }; closeDlg(); render(); } else busy(form, false);
   } },
     h("h2", null, isNew ? "일정 추가" : "일정 수정"),
     field("일정 이름", "e-title", title),
     h("div", { class: "row", style: "align-items:flex-start" }, field("날짜", "e-date", d), field("시작 시간 (선택)", "e-t1", t1), field("끝나는 시간 (선택)", "e-t2", t2)),
     field("장소 (선택)", "e-place", place), field("메모 (선택)", "e-memo", memo),
-    dlgFoot(err, "확인", isNew ? null : () => { p.events = p.events.filter(x => x.id !== ev.id); closeDlg(); changed(); })));
+    dlgFoot(err, "저장", isNew ? null : async () => { if (await save("일정을 삭제", () => deleteDoc(doc(db, "projects", p.id, "events", ev.id)))) closeDlg(); }));
+  openDlg(form);
 }
 function calendarView(p) {
-  const admin = !!S.admin, t = today();
+  const admin = S.isAdmin, t = today();
   if (!S.cal) S.cal = { y: t.getFullYear(), m: t.getMonth() };
   const { y, m } = S.cal;
   const first = new Date(y, m, 1), dim = new Date(y, m + 1, 0).getDate();
   const move = n => { const d = new Date(y, m + n, 1); S.cal = { y: d.getFullYear(), m: d.getMonth() }; render(); };
-  const events = sortEvents(p.events), ms = p.milestones || [];
+  const events = sortEvents(S.events[p.id]), ms = p.milestones || [], todos = (S.todos[p.id] || []).filter(x => x.due);
   const monthKey = `${y}-${String(m + 1).padStart(2, "0")}`;
   const cells = [];
   for (let i = 0; i < first.getDay(); i++) cells.push(h("div", { class: "cell off" }));
   for (let day = 1; day <= dim; day++) {
     const key = `${monthKey}-${String(day).padStart(2, "0")}`, dow = new Date(y, m, day).getDay();
-    const evs = events.filter(e => e.date === key), mss = ms.filter(x => x.date === key);
     const marks = [key === p.start ? "연구 시작" : null, key === p.end ? "연구 종료" : null].filter(Boolean);
     cells.push(h("div", { class: "cell" + (key === iso(t) ? " today" : "") },
       h("div", { class: "row spread", style: "gap:4px;flex-wrap:nowrap" },
         h("span", { class: "dnum num" + (dow === 0 ? " sun" : "") }, day),
         admin ? h("button", { class: "addday", type: "button", "aria-label": `${m + 1}월 ${day}일에 일정 추가`, onclick: () => eventDialog(p, null, key) }, "+") : null),
       marks.map(x => h("span", { class: "cev mark" }, x)),
-      mss.map(x => h("span", { class: "cev ms2", title: x.label }, "◆ " + x.label)),
-      evs.map(e => h("button", { class: "cev", type: "button", title: [timeOf(e), e.title, e.place].filter(Boolean).join(" · "), onclick: () => eventDialog(p, e) }, (e.time ? e.time + " " : "") + e.title))));
+      ms.filter(x => x.date === key).map(x => h("span", { class: "cev ms2", title: x.label }, "◆ " + x.label)),
+      todos.filter(x => x.due === key).map(x => h("span", { class: "cev td2" + (x.done ? " done" : ""), title: `${x.title} · 담당 ${whoName(p, x.assignee)}` }, (x.done ? "☑ " : "☐ ") + x.title)),
+      events.filter(e => e.date === key).map(e => h("button", { class: "cev", type: "button", title: [timeOf(e), e.title, e.place].filter(Boolean).join(" · "), onclick: () => eventDialog(p, e) }, (e.time ? e.time + " " : "") + e.title))));
   }
   while (cells.length % 7) cells.push(h("div", { class: "cell off" }));
-  const monthItems = [
-    ...events.filter(e => e.date.startsWith(monthKey)).map(e => ({ date: e.date, sort: e.date + (e.time || ""), e })),
-    ...ms.filter(x => (x.date || "").startsWith(monthKey)).map(x => ({ date: x.date, sort: x.date, ms: x })),
-  ].sort((a, b) => a.sort.localeCompare(b.sort));
+  const monthEvents = events.filter(e => e.date.startsWith(monthKey));
   return h("div", { class: "stack" },
     h("section", { class: "panel stack", style: "gap:14px" },
       h("div", { class: "row spread" },
@@ -563,40 +623,42 @@ function calendarView(p) {
           h("button", { class: "btn", type: "button", "aria-label": "다음 달", onclick: () => move(1) }, "→"),
           h("button", { class: "btn quiet", type: "button", onclick: () => { S.cal = { y: t.getFullYear(), m: t.getMonth() }; render(); } }, "오늘")),
         admin ? h("button", { class: "btn primary", type: "button", onclick: () => eventDialog(p, null, monthKey === iso(t).slice(0, 7) ? iso(t) : monthKey + "-01") }, "일정 추가") : null),
-      h("div", { class: "calwrap" }, h("div", { class: "cal" }, WEEK.map((w, i) => h("div", { class: "dow" + (i === 0 ? " sun" : "") }, w)), cells))),
-    h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `${m + 1}월 일정 ${monthItems.length}건`),
-      monthItems.length ? h("ul", { class: "list" }, monthItems.map(it => it.e
-        ? h("li", null, h("span", { class: "when wide num" }, fmtDay(it.date)),
-            h("span", { style: "flex:1;min-width:0" }, h("b", { style: "font-weight:600" }, it.e.title),
-              h("span", { class: "small muted", style: "display:block" }, [timeOf(it.e), it.e.place].filter(Boolean).join(" · ")),
-              it.e.memo ? h("span", { class: "small", style: "display:block;white-space:pre-wrap" }, it.e.memo) : null),
-            admin ? h("button", { class: "btn quiet small", type: "button", onclick: () => eventDialog(p, it.e) }, "수정") : null)
-        : h("li", null, h("span", { class: "when wide num" }, fmtDay(it.date)), h("span", { style: "flex:1" }, "◆ " + it.ms.label), it.ms.done ? h("span", { class: "tick" }, "완료") : null)))
+      h("div", { class: "calwrap" }, h("div", { class: "cal" }, WEEK.map((w, i) => h("div", { class: "dow" + (i === 0 ? " sun" : "") }, w)), cells)),
+      h("div", { class: "legend" }, h("span", null, "■ 회의·일정"), h("span", null, "◆ 마감·주요 일정"), h("span", null, "☐ 할 일 마감"))),
+    h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `${m + 1}월 회의·일정 ${monthEvents.length}건`),
+      monthEvents.length ? h("ul", { class: "list" }, monthEvents.map(e => h("li", null, h("span", { class: "when wide num" }, fmtDay(e.date)),
+        h("span", { style: "flex:1;min-width:0" }, h("b", { style: "font-weight:600" }, e.title),
+          h("span", { class: "small muted", style: "display:block" }, [timeOf(e), e.place].filter(Boolean).join(" · ")),
+          e.memo ? h("span", { class: "small", style: "display:block;white-space:pre-wrap" }, e.memo) : null),
+        admin ? h("button", { class: "btn quiet small", type: "button", onclick: () => eventDialog(p, e) }, "수정") : null)))
         : h("div", { class: "muted small" }, admin ? "이 달에 등록된 일정이 없습니다. 날짜 칸의 +를 눌러 회의 일정을 넣어 주세요." : "이 달에 등록된 일정이 없습니다.")));
 }
 
-/* ---------- 공통 바로가기 편집 (관리자) ---------- */
+/* ---------- 공통 바로가기 (관리자) ---------- */
 function editLink(l) {
   const isNew = !l; l = l || {};
   const label = h("input", { type: "text", value: l.label || "", required: true, maxlength: 60 });
   const url = h("input", { type: "url", value: l.url || "", required: true, placeholder: "https://" });
   const group = h("input", { type: "text", value: l.group || "", list: "groups", maxlength: 30 });
   const err = h("span", { class: "err" });
-  openDlg(h("form", { class: "dlg", onsubmit: ev => {
+  const form = h("form", { class: "dlg", onsubmit: async ev => {
     ev.preventDefault();
     const u = safeUrl(url.value);
     if (!label.value.trim() || !u) { err.textContent = "이름과 https:// 주소를 입력해 주세요."; return; }
-    const item = { id: l.id || "l" + newId(), label: label.value.trim(), url: u, group: group.value.trim() || "기타", order: l.order ?? Date.now() };
-    S.data.links = (S.data.links || []).filter(x => x.id !== item.id).concat(item); closeDlg(); changed();
+    busy(form, true);
+    if (await save("바로가기를 저장", () => setDoc(doc(db, "links", l.id || "l" + newId()), { label: label.value.trim(), url: u, group: group.value.trim() || "기타", order: l.order ?? Date.now() }))) closeDlg(); else busy(form, false);
   } },
     h("h2", null, isNew ? "공통 바로가기 추가" : "공통 바로가기 수정"),
-    h("div", { class: "help" }, "공통 바로가기는 비밀번호 없이 누구에게나 보입니다. 과제별 폴더 주소는 ‘과제 수정’에 넣어 주세요."),
+    h("div", { class: "help" }, "공통 바로가기는 로그인하지 않은 사람에게도 보입니다. 과제별 폴더 주소는 ‘과제 수정’에 넣어 주세요."),
     field("이름", "k-label", label), field("주소", "k-url", url), field("묶음", "k-group", group),
     h("datalist", { id: "groups" }, GROUPS.map(g => h("option", { value: g }))),
-    dlgFoot(err, "확인", isNew ? null : () => { S.data.links = S.data.links.filter(x => x.id !== l.id); closeDlg(); changed(); })), true);
+    dlgFoot(err, "저장", isNew ? null : async () => { if (await save("바로가기를 삭제", () => deleteDoc(doc(db, "links", l.id)))) closeDlg(); }));
+  openDlg(form, true);
 }
-
-/* ---------- 왼쪽 도구 목록 ---------- */
+async function seedLinks(btn) {
+  btn.disabled = true;
+  await save("기본 바로가기를 넣", async () => { const b = writeBatch(db); SEED_LINKS.forEach(([label, url, group], i) => b.set(doc(db, "links", "s" + i), { label, url, group, order: i })); await b.commit(); });
+}
 function groupBy(list, order) {
   const g = {}; list.forEach(l => (g[l.group || "기타"] ||= []).push(l));
   return [...order.filter(n => g[n]), ...Object.keys(g).filter(n => !order.includes(n)).sort()].map(n => [n, g[n]]);
@@ -609,14 +671,17 @@ function toolGroups(list, order, opts) {
       return opts.edit ? h("div", { class: "toolrow" }, a, h("button", { class: "btn quiet small", type: "button", onclick: () => editLink(l) }, "수정")) : a; })));
 }
 function sidebar(roomTitle, roomLinks) {
-  const common = [...(S.data.links || [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const admin = !!S.admin;
+  const common = [...S.links].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const admin = S.isAdmin;
   return h("aside", { class: "side", "aria-label": "도구 목록" },
     h("div", { class: "side-title" }, roomTitle || "공통 바로가기"),
     roomLinks ? toolGroups(roomLinks, ROOM_GROUPS, { open: "all" }) : null,
     roomLinks && !roomLinks.length ? h("div", { class: "small muted", style: "padding:8px" }, "이 과제에 등록된 도구가 없습니다.") : null,
     toolGroups(common, GROUPS, { open: roomLinks ? "none" : "first", edit: admin && !roomLinks }),
-    admin && !roomLinks ? h("div", { style: "padding:6px 4px 0" }, h("button", { class: "btn", type: "button", onclick: () => editLink(null) }, "공통 바로가기 추가")) : null);
+    !roomLinks && S.loaded.links && !common.length ? h("div", { class: "small muted", style: "padding:8px" }, "등록된 바로가기가 없습니다.") : null,
+    admin && !roomLinks ? h("div", { class: "row", style: "padding:6px 4px 0;gap:8px" },
+      h("button", { class: "btn", type: "button", onclick: () => editLink(null) }, "바로가기 추가"),
+      S.loaded.links && !common.length ? h("button", { class: "btn", type: "button", onclick: ev => seedLinks(ev.currentTarget) }, "기본 목록 넣기") : null) : null);
 }
 
 /* ---------- 연간 일정표 (관리자 전용) ---------- */
@@ -627,7 +692,7 @@ function monthPos(d, year, endOfDay) {
 }
 function timeline() {
   const y = S.year, t = today();
-  const all = [...S.admin.projects].sort((a, b) => (a.start || "9").localeCompare(b.start || "9") || a.title.localeCompare(b.title));
+  const all = [...S.projects].sort((a, b) => (a.start || "9").localeCompare(b.start || "9") || a.title.localeCompare(b.title));
   const inYear = all.filter(p => { const s = D(p.start), e = D(p.end); return s && e && s.getFullYear() <= y && e.getFullYear() >= y; });
   const rest = all.filter(p => !inYear.includes(p));
   const cnt = k => inYear.filter(p => status(p).key === k).length;
@@ -635,8 +700,7 @@ function timeline() {
     const s = D(p.start), e = D(p.end), st = status(p), c = typeColor(p.type);
     const L = monthPos(s, y), R = monthPos(e, y, true);
     return h("a", { class: "tl-row", href: "#p-" + p.id },
-      h("div", { class: "tl-label" },
-        h("div", { class: "tl-title" }, p.title),
+      h("div", { class: "tl-label" }, h("div", { class: "tl-title" }, p.title),
         h("div", { class: "row small", style: "gap:6px;margin-top:2px" }, h("span", { class: "chip type", style: `--c:${c}` }, p.type || "기타"), h("span", { class: "pill " + st.key }, st.label)),
         h("div", { class: "small muted num" }, period(p))),
       h("div", { class: "track" },
@@ -653,119 +717,135 @@ function timeline() {
         h("button", { class: "btn", type: "button", "aria-label": "이전 해", onclick: () => { S.year--; render(); } }, "←"),
         h("strong", { class: "num" }, y + "년"),
         h("button", { class: "btn", type: "button", "aria-label": "다음 해", onclick: () => { S.year++; render(); } }, "→"))),
-    inYear.length ? h("div", { class: "tl" },
-      h("div", { class: "tl-head" }, h("div"), h("div", { class: "months num" }, Array.from({ length: 12 }, (_, i) => h("span", null, (i + 1) + "월")))), rows)
+    inYear.length ? h("div", { class: "tl" }, h("div", { class: "tl-head" }, h("div"), h("div", { class: "months num" }, Array.from({ length: 12 }, (_, i) => h("span", null, (i + 1) + "월")))), rows)
       : h("div", { class: "muted" }, `${y}년에 걸친 과제가 없습니다.`),
-    inYear.length ? h("div", { class: "legend" },
-      types.map(tp => h("span", null, h("i", { class: "lg-bar", style: `--c:${typeColor(tp)}` }), tp)),
-      h("span", null, h("i", { class: "lg-ms" }), "주요 일정"),
-      t.getFullYear() === y ? h("span", null, h("i", { class: "lg-today" }), "오늘") : null) : null,
-    rest.length ? h("div", { class: "small" }, h("span", { class: "muted" }, "다른 해 또는 기간 미정: "),
-      rest.map((p, i) => [i ? ", " : "", h("a", { href: "#p-" + p.id }, `${p.title} (${period(p)})`)])) : null);
+    inYear.length ? h("div", { class: "legend" }, types.map(tp => h("span", null, h("i", { class: "lg-bar", style: `--c:${typeColor(tp)}` }), tp)),
+      h("span", null, h("i", { class: "lg-ms" }), "마감·주요 일정"), t.getFullYear() === y ? h("span", null, h("i", { class: "lg-today" }), "오늘") : null) : null,
+    rest.length ? h("div", { class: "small" }, h("span", { class: "muted" }, "다른 해 또는 기간 미정: "), rest.map((p, i) => [i ? ", " : "", h("a", { href: "#p-" + p.id }, `${p.title} (${period(p)})`)])) : null);
 }
 
 /* ---------- 화면: 첫 화면 ---------- */
+function dayCard(lines) {
+  const n = new Date();
+  return h("div", { class: "daycard" },
+    h("div", { class: "calbox" }, h("div", { class: "mon" }, (n.getMonth() + 1) + "월"), h("div", { class: "dd num" }, n.getDate()), h("div", { class: "small" }, WEEK[n.getDay()] + "요일")),
+    h("div", { class: "info" }, lines));
+}
 function viewHome() {
-  const admin = !!S.admin, n = new Date();
-  const rooms = (admin ? S.admin.projects : S.data.rooms || []).slice().sort((a, b) => a.title.localeCompare(b.title));
-  const list = !rooms.length ? h("div", { class: "muted" }, admin ? "아직 과제가 없습니다. ‘과제 추가’를 눌러 과제명·연구기간·비밀번호를 정해 주세요."
-      : S.data.admin ? "아직 등록된 과제가 없습니다." : "처음 설정이 필요합니다. 오른쪽 위 ‘관리자’를 눌러 관리자 비밀번호를 정해 주세요.")
-    : h("div", { class: "plist" }, rooms.map(r => h("button", { class: "pitem", type: "button", onclick: () => enterRoom(r) },
-        tile(r.title), h("span", { class: "ptitle" }, r.title),
-        admin ? h("span", { class: "lock open" }, "관리자") : S.open[r.id] ? h("span", { class: "lock open" }, "열림") : h("span", { class: "lock" }, "비밀번호 필요"))));
+  if (!S.user) return h("div", { class: "shell" }, sidebar(null, null),
+    h("div", { class: "stack" }, h("h1", null, "연구과제"),
+      h("section", { class: "panel stack", style: "gap:12px;max-width:560px" },
+        h("h2", null, "Google 계정으로 로그인"),
+        h("p", { class: "muted", style: "margin:0" }, "관리자가 등록한 메일의 Google 계정으로 로그인하면 참여하는 과제로 바로 이동합니다. 비밀번호를 따로 입력하지 않습니다."),
+        h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "Google 계정으로 로그인")))));
+  const admin = S.isAdmin;
+  const rooms = [...S.projects].sort((a, b) => a.title.localeCompare(b.title));
+  const openTodos = p => (S.todos[p.id] || []).filter(t => !t.done && (admin || isMine(t))).length;
+  const list = !S.loaded.projects ? h("div", { class: "muted" }, "과제를 불러오는 중입니다…")
+    : !rooms.length ? h("div", { class: "muted" }, admin ? "아직 과제가 없습니다. ‘과제 추가’를 눌러 과제명·연구기간·연구진 메일을 넣어 주세요."
+        : `${me()} 계정으로 등록된 과제가 없습니다. 관리자에게 이 메일 주소를 연구진으로 등록해 달라고 요청해 주세요.`)
+    : h("div", { class: "plist" }, rooms.map(r => h("a", { class: "pitem", href: "#p-" + r.id }, tile(r.title), h("span", { class: "ptitle" }, r.title),
+        h("span", { class: "lock" }, openTodos(r) ? `할 일 ${openTodos(r)}건` : "할 일 없음"))));
   return h("div", { class: "shell" }, sidebar(null, null),
     h("div", { class: "stack" },
       h("div", { class: "row spread" },
-        h("div", null, h("h1", null, "연구과제"), h("div", { class: "muted" }, admin ? "관리자 모드입니다. 과제를 누르면 바로 들어갑니다." : "참여하는 과제를 누르고 비밀번호를 입력하세요.")),
+        h("div", null, h("h1", null, "연구과제"), h("div", { class: "muted" }, admin ? "관리자 화면입니다. 모든 과제와 마감이 보입니다." : `${S.user.name || me()} 님이 참여하는 과제입니다.`)),
         admin ? h("div", { class: "row", style: "gap:8px" },
           h("button", { class: "btn", type: "button", onclick: manageTypes }, "과제 유형 관리"),
           h("button", { class: "btn primary", type: "button", onclick: () => editProject(null) }, "과제 추가")) : null),
-      h("div", { class: "daycard" },
-        h("div", { class: "calbox" }, h("div", { class: "mon" }, (n.getMonth() + 1) + "월"), h("div", { class: "dd num" }, n.getDate()), h("div", { class: "small" }, WEEK[n.getDay()] + "요일")),
-        h("div", { class: "info" }, h("b", null, `등록된 과제 ${rooms.length}건`), h("span", { class: "small muted" }, "왼쪽 목록의 도구를 누르면 새 창으로 열립니다."))),
-      h("section", { class: "panel stack", style: "gap:8px" }, h("h2", null, "과제 선택"), list),
-      admin ? timeline() : null));
+      dayCard([h("b", null, S.loaded.projects ? `${admin ? "등록된" : "참여"} 과제 ${rooms.length}건` : "과제 불러오는 중…"), h("span", { class: "small muted" }, "왼쪽 목록의 도구를 누르면 새 창으로 열립니다.")]),
+      S.loaded.projects && rooms.length ? agenda() : null,
+      h("section", { class: "panel stack", style: "gap:8px" }, h("h2", null, admin ? "과제" : "내 과제"), list),
+      admin && S.loaded.projects ? timeline() : null));
 }
 
 /* ---------- 화면: 과제 ---------- */
 function viewRoom(id, tab) {
-  const back = h("a", { href: "#home", class: "small" }, "← 과제 목록");
-  const mine = S.admin ? S.admin.projects.find(p => p.id === id) : null;
-  const room = (S.data.rooms || []).find(r => r.id === id);
-  if (!room && !mine) return h("div", { class: "stack" }, back, h("div", { class: "panel" }, "이 과제를 찾을 수 없습니다. 삭제되었거나 주소가 바뀌었을 수 있습니다."));
-  const p = mine || S.open[id], title = (mine || room).title;
-  if (!p) return h("div", { class: "stack" }, back,
-    h("div", { class: "panel stack", style: "gap:12px;max-width:520px" }, h("h1", null, title),
-      h("div", { class: "muted" }, "이 과제의 내용은 비밀번호를 입력해야 볼 수 있습니다."),
-      h("div", null, h("button", { class: "btn primary", type: "button", onclick: () => enterRoom(room, tab === "cal") }, "비밀번호 입력"))));
-  const links = (p.links || []).filter(l => safeUrl(l.url)), t = today();
+  const back = h("a", { href: "#home", class: "small" }, "← 첫 화면");
+  if (!S.user) return h("div", { class: "stack" }, back, h("div", { class: "panel stack", style: "gap:12px;max-width:520px" }, h("h2", null, "로그인이 필요합니다"),
+    h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "Google 계정으로 로그인"))));
+  if (!S.loaded.projects) return h("div", { class: "stack" }, back, h("div", { class: "panel muted" }, "불러오는 중입니다…"));
+  const p = S.projects.find(x => x.id === id);
+  if (!p) return h("div", { class: "stack" }, back, h("div", { class: "panel" }, "이 과제를 볼 수 없습니다. 연구진으로 등록되지 않았거나 삭제된 과제입니다."));
+  const links = (p.links || []).filter(l => safeUrl(l.url)), t = today(), admin = S.isAdmin;
   const st = status(p), ms = p.milestones || [], members = p.members || [];
   const next = ms.find(x => !x.done && D(x.date) && D(x.date) >= t);
-  const upcoming = sortEvents(p.events).filter(e => e.date >= iso(t)).slice(0, 4);
+  const upcoming = sortEvents(S.events[id]).filter(e => e.date >= iso(t)).slice(0, 4);
+  const todos = sortTodos(S.todos[id] || []), open = todos.filter(x => !x.done && (admin || isMine(x)));
+  const tabLink = (key, label) => h("a", { href: "#p-" + id + (key ? "-" + key : ""), "aria-current": tab === key ? "page" : null }, label);
   const head = h("div", { class: "stack", style: "gap:12px" },
-    h("div", { class: "row spread", style: "align-items:flex-start" }, h("h1", null, title),
-      mine ? h("button", { class: "btn", type: "button", onclick: () => editProject(mine) }, "과제 수정") : null),
-    h("nav", { class: "tabs", "aria-label": "과제 화면" },
-      h("a", { href: "#p-" + id, "aria-current": tab !== "cal" ? "page" : null }, "개요"),
-      h("a", { href: "#p-" + id + "-cal", "aria-current": tab === "cal" ? "page" : null }, "달력")));
+    h("div", { class: "row spread", style: "align-items:flex-start" }, h("h1", null, p.title),
+      admin ? h("button", { class: "btn", type: "button", onclick: () => editProject(p) }, "과제 수정") : null),
+    h("nav", { class: "tabs", "aria-label": "과제 화면" }, tabLink("", "개요"), tabLink("todo", `할 일${open.length ? " " + open.length : ""}`), tabLink("cal", "달력")));
   const overview = () => h("div", { class: "stack" },
+    h("section", { class: "panel stack", style: "gap:6px" },
+      h("div", { class: "row spread" }, h("h2", null, `${admin ? "남은 할 일" : "내 할 일"} ${open.length}건`), h("a", { class: "small", href: "#p-" + id + "-todo" }, "모두 보기")),
+      open.length ? h("ul", { class: "list" }, open.slice(0, 5).map(x => todoRow(p, x))) : h("div", { class: "muted small" }, admin ? "남은 할 일이 없습니다." : "지금 나에게 배정된 할 일이 없습니다.")),
     p.notice ? h("section", { class: "panel stack", style: "gap:8px" }, h("h2", null, "안내"), h("p", { class: "notice" }, p.notice)) : null,
     h("section", { class: "stack", style: "gap:12px" }, h("h2", null, "이 과제의 도구"),
       links.length ? h("div", { class: "cards" }, links.map(l => h("a", { class: "card", href: safeUrl(l.url), target: "_blank", rel: "noopener" },
         tile(l.label), h("span", { style: "min-width:0" }, h("b", null, l.label), h("span", { class: "host" }, host(l.url))))))
-        : h("div", { class: "panel muted" }, mine ? "‘과제 수정’에서 이 과제의 Dropbox·Google Drive 폴더와 협업 도구 주소를 넣어 주세요." : "아직 등록된 도구가 없습니다.")),
+        : h("div", { class: "panel muted" }, admin ? "‘과제 수정’에서 이 과제의 Dropbox·Google Drive 폴더와 협업 도구 주소를 넣어 주세요." : "아직 등록된 도구가 없습니다.")),
     h("div", { class: "cols" },
       h("section", { class: "panel stack", style: "gap:10px" }, h("h2", null, "연구 일정"),
         h("div", { class: "row", style: "gap:8px" }, h("span", { class: "pill " + st.key }, st.label), h("span", { class: "num" }, period(p)), st.note ? h("span", { class: "muted num" }, st.note) : null),
         ms.length ? h("ul", { class: "list" }, ms.map(x => { const d = D(x.date);
           return h("li", { class: x.done || (d && d < t) ? "muted" : "", style: x === next ? "font-weight:600" : null }, h("span", { class: "when num" }, fmt(x.date)),
             h("span", { style: "flex:1" }, x.label, x === next ? h("span", { class: "muted small num", style: "font-weight:400" }, ` · ${days(t, d) === 0 ? "오늘" : days(t, d) + "일 뒤"}`) : null),
-            x.done ? h("span", { class: "tick" }, "완료") : null); })) : h("div", { class: "muted small" }, "등록된 주요 일정이 없습니다.")),
+            x.done ? h("span", { class: "tick" }, "완료") : null); })) : h("div", { class: "muted small" }, "등록된 마감·주요 일정이 없습니다.")),
       h("section", { class: "panel stack", style: "gap:10px" }, h("div", { class: "row spread" }, h("h2", null, "다가오는 회의·일정"), h("a", { class: "small", href: "#p-" + id + "-cal" }, "달력 보기")),
         upcoming.length ? h("ul", { class: "list" }, upcoming.map(e => h("li", null, h("span", { class: "when wide num" }, fmtDay(e.date)),
           h("span", { style: "flex:1;min-width:0" }, h("b", { style: "font-weight:600" }, e.title), h("span", { class: "small muted", style: "display:block" }, [timeOf(e), e.place].filter(Boolean).join(" · "))))))
           : h("div", { class: "muted small" }, "예정된 일정이 없습니다."))),
     h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `공동연구진 ${members.length}명`),
-      members.length ? h("ul", { class: "list" }, members.map(x => h("li", null, h("span", { style: "flex:0 0 120px;font-weight:600" }, x.name), h("span", { style: "flex:0 0 110px" }, x.role || ""), h("span", { class: "muted", style: "flex:1" }, x.org || ""))))
-        : h("div", { class: "muted small" }, mine ? "‘과제 수정’에서 연구진의 이름·역할·소속을 넣어 주세요." : "등록된 연구진이 없습니다.")));
-  return h("div", { class: "shell" }, sidebar(title, links), h("div", { class: "stack" }, back, head, tab === "cal" ? calendarView(p) : overview()));
+      members.length ? h("ul", { class: "list" }, members.map(x => h("li", { style: "flex-wrap:wrap" }, h("span", { style: "flex:0 0 110px;font-weight:600" }, x.name), h("span", { style: "flex:0 0 100px" }, x.role || ""), h("span", { class: "muted", style: "flex:1 1 120px" }, x.org || ""),
+        admin ? h("span", { class: "small muted", style: "overflow-wrap:anywhere" }, x.email || "메일 없음 — 로그인 불가") : null)))
+        : h("div", { class: "muted small" }, admin ? "‘과제 수정’에서 연구진의 이름과 Google 계정 메일을 넣어 주세요." : "등록된 연구진이 없습니다.")));
+  return h("div", { class: "shell" }, sidebar(p.title, links), h("div", { class: "stack" }, back, head, tab === "cal" ? calendarView(p) : tab === "todo" ? todosView(p) : overview()));
 }
 
 /* ---------- 그리기 ---------- */
 function render() {
-  const hdr = $("#hdr");
-  if (!S.data) {
+  const hdr = $("#hdr"), app = $("#app");
+  if (!S.configured) {
     hdr.replaceChildren();
-    $("#app").replaceChildren(S.loadErr ? h("div", { class: "panel stack", style: "max-width:640px" },
-      h("h2", null, "data.json을 불러오지 못했습니다"),
-      h("p", { class: "muted", style: "margin:0" }, "index.html과 같은 폴더에 data.json이 있어야 합니다. 내 컴퓨터에서 파일을 직접 열어 보는 중이라면 아래에서 data.json을 골라 주세요."),
-      h("input", { type: "file", accept: ".json,application/json", "aria-label": "data.json 고르기", onchange: async ev => { try { S.data = JSON.parse(await ev.target.files[0].text()); S.loadErr = false; render(); } catch { toast("data.json 형식이 올바르지 않습니다."); } } }))
-      : h("div", { class: "panel muted" }, "불러오는 중입니다…"));
+    app.replaceChildren(h("div", { class: "panel stack", style: "max-width:640px" }, h("h2", null, "Firebase 설정이 필요합니다"),
+      h("p", { class: "muted", style: "margin:0" }, "firebase-config.js 파일에 Firebase 설정값과 관리자 메일을 넣은 뒤 GitHub에 다시 올려 주세요. 자세한 순서는 README.md에 있습니다.")));
     return;
   }
-  hdr.replaceChildren(...[].concat(S.admin ? [
-      h("span", { class: "who" }, "관리자 모드"),
-      h("button", { class: "btn", type: "button", onclick: ev => exportData(ev.currentTarget) }, "data.json 내려받기"),
-      h("button", { class: "btn quiet", type: "button", onclick: changeAdminPw }, "비밀번호 변경"),
-      h("button", { class: "btn quiet", type: "button", onclick: async () => { if (S.dirty && !await ask("내려받지 않은 변경이 있습니다. 나가면 사라집니다. 나갈까요?", "나가기")) return; S.admin = null; S.adminPw = null; S.dirty = 0; location.reload(); } }, "나가기")]
-    : h("button", { class: "btn quiet", type: "button", onclick: adminDialog }, "관리자")));
-  const hash = location.hash.slice(1);
-  const m = /^p-([A-Za-z0-9]+)(-cal)?$/.exec(hash);
-  const view = m ? viewRoom(m[1], m[2] ? "cal" : "") : viewHome();
-  const bar = S.admin && S.dirty ? h("div", { class: "banner row spread" },
-    h("span", null, h("b", null, `저장하지 않은 변경 ${S.dirty}건. `), "data.json을 내려받아 GitHub 저장소의 파일을 바꿔야 사이트에 반영됩니다."),
-    h("button", { class: "btn primary", type: "button", onclick: ev => exportData(ev.currentTarget) }, "data.json 내려받기")) : null;
-  $("#app").replaceChildren(h("div", { class: "stack" }, bar, view));
+  if (!S.authReady) { hdr.replaceChildren(); app.replaceChildren(h("div", { class: "panel muted" }, "불러오는 중입니다…")); return; }
+  hdr.replaceChildren(...(S.user ? [
+      h("span", { class: "who" }, `${S.user.name || S.user.email}${S.isAdmin ? " · 관리자" : ""}`),
+      h("button", { class: "btn quiet", type: "button", onclick: () => signOut(auth) }, "로그아웃")]
+    : [h("button", { class: "btn", type: "button", onclick: login }, "로그인")]));
+  const m = /^p-([A-Za-z0-9]+)(?:-(cal|todo))?$/.exec(location.hash.slice(1));
+  const view = m ? viewRoom(m[1], m[2] || "") : viewHome();
+  const note = S.denied ? h("div", { class: "banner" }, S.isAdmin
+    ? "자료를 읽을 권한이 없다고 나옵니다. Firestore 보안 규칙을 게시했는지, 규칙 안의 관리자 메일이 firebase-config.js의 관리자 메일과 같은지 확인해 주세요."
+    : "자료를 읽을 권한이 없습니다. 관리자에게 문의해 주세요.") : null;
+  app.replaceChildren(h("div", { class: "stack" }, note, view));
 }
-async function boot() {
+
+function boot() {
   const n = new Date();
   S.year = n.getMonth() >= 9 ? n.getFullYear() + 1 : n.getFullYear();
+  S.configured = !!(firebaseConfig && firebaseConfig.apiKey && !/여기에|YOUR_|PASTE/.test(firebaseConfig.apiKey));
   render();
+  if (!S.configured) return;
   window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); });
-  window.addEventListener("beforeunload", ev => { if (S.dirty) { ev.preventDefault(); ev.returnValue = ""; } });
-  try { const r = await fetch("data.json?t=" + Date.now(), { cache: "no-store" }); if (!r.ok) throw 0; S.data = await r.json(); }
-  catch { S.loadErr = true; }
-  render();
+  const app = initializeApp(firebaseConfig);
+  auth = getAuth(app); db = getFirestore(app);
+  let linksStop = watchLinks();
+  onAuthStateChanged(auth, u => {
+    stopAll(); linksStop(); 
+    S.projects = []; S.todos = {}; S.events = {}; S.types = null; S.loaded.projects = false; S.denied = false; S.redirected = false;
+    S.user = u && u.email ? { email: normEmail(u.email), name: u.displayName || "" } : null;
+    S.isAdmin = !!S.user && (ADMIN_EMAILS || []).map(normEmail).includes(S.user.email);
+    S.authReady = true;
+    linksStop = watchLinks();
+    if (S.user) watchProjects();
+    render();
+  });
 }
 boot();
 </script>
