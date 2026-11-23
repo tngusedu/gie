@@ -1,6 +1,6 @@
 {
  "v": 1,
- "updated": "2026-11-23T00:00:00Z",
+ "updated": "2026-11-23T06:54:08.903Z",
  "links": [
   {
    "id": "dropbox",
@@ -137,5 +137,9 @@
   }
  ],
  "rooms": [],
- "admin": null
+ "admin": {
+  "salt": "cwooDwvgG5eamoDId7xtXw==",
+  "iv": "71l+DeZ3WRds3yI1",
+  "data": "dUizADcxkrLb5hsK5sGzVgZEAB8EotVeAonnEh9atQ=="
+ }
 }
