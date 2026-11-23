@@ -752,54 +752,20 @@ function editLink(l) {
     if (!label.value.trim() || !u) { err.textContent = "이름과 https:// 주소를 입력해 주세요."; return; }
     if (icon.value.trim() && !iconSrc(icon.value)) { err.textContent = "아이콘은 https:// 이미지 주소나 icons/dropbox.png 같은 파일 경로로 적어 주세요."; return; }
     busy(form, true);
-    if (await save("바로가기를 저장", () => setDoc(doc(db, "links", l.id || "l" + newId()), { label: label.value.trim(), url: u, group: group.value.trim() || "기타", icon: iconSrc(icon.value), order: l.order ?? Date.now(), ...gorderOf(group.value.trim() || "기타") }))) closeDlg(); else busy(form, false);
+    if (await save("바로가기를 저장", () => setDoc(doc(db, "links", l.id || "l" + newId()), { label: label.value.trim(), url: u, group: group.value.trim() || "기타", icon: iconSrc(icon.value), order: l.order ?? Date.now() }))) closeDlg(); else busy(form, false);
   } },
     h("h2", null, isNew ? "공통 바로가기 추가" : "공통 바로가기 수정"),
     h("div", { class: "help" }, "공통 바로가기는 로그인하지 않은 사람에게도 보입니다. 과제별 폴더 주소는 ‘과제 수정’에 넣어 주세요."),
     field("이름", "k-label", label), field("주소", "k-url", url), field("묶음", "k-group", group),
     field("아이콘 이미지 (선택)", "k-icon", icon),
     h("div", { class: "help" }, "직접 지정하려면 이미지 주소(https://…)를 넣거나, GitHub 저장소에 icons 폴더를 만들어 이미지를 올린 뒤 icons/dropbox.png 처럼 적습니다."),
-    h("datalist", { id: "groups" }, [...new Set([...commonOrder(), ...GROUPS])].map(g => h("option", { value: g }))),
+    h("datalist", { id: "groups" }, GROUPS.map(g => h("option", { value: g }))),
     dlgFoot(err, "저장", isNew ? null : async () => { if (await save("바로가기를 삭제", () => deleteDoc(doc(db, "links", l.id)))) closeDlg(); }));
   openDlg(form, true);
 }
 async function seedLinks(btn) {
   btn.disabled = true;
   await save("기본 바로가기를 넣", async () => { const b = writeBatch(db); SEED_LINKS.forEach(([label, url, group], i) => b.set(doc(db, "links", "s" + i), { label, url, group, order: i })); await b.commit(); });
-}
-// 공통 바로가기 묶음의 순서: 관리자가 정한 순서(gorder)가 있으면 그것을, 없으면 기본 순서를 따른다
-function commonOrder() {
-  const pos = {};
-  S.links.forEach(l => { const g = l.group || "기타", d = GROUPS.indexOf(g), v = typeof l.gorder === "number" ? l.gorder : (d < 0 ? 900 : 100 + d); if (!(g in pos) || v < pos[g]) pos[g] = v; });
-  return Object.keys(pos).sort((a, b) => pos[a] - pos[b] || a.localeCompare(b));
-}
-function gorderOf(g) { const m = S.links.filter(l => (l.group || "기타") === g && typeof l.gorder === "number").map(l => l.gorder); return m.length ? { gorder: Math.min(...m) } : {}; }
-function manageGroups() {
-  const box = h("div", { class: "stack", style: "gap:8px" });
-  const count = g => S.links.filter(l => (l.group || "기타") === g).length;
-  const move = (row, dir) => { const sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling; if (!sib) return; if (dir < 0) box.insertBefore(row, sib); else box.insertBefore(sib, row); };
-  commonOrder().forEach(g => { const row = h("div", { class: "subrow", style: "flex-wrap:nowrap" },
-      h("input", { type: "text", value: g, maxlength: 30, "aria-label": "묶음 이름", "data-old": g }),
-      h("span", { class: "small muted num", style: "flex:0 0 40px" }, `${count(g)}개`),
-      h("button", { class: "btn", type: "button", "aria-label": `${g} 위로`, onclick: () => move(row, -1) }, "↑"),
-      h("button", { class: "btn", type: "button", "aria-label": `${g} 아래로`, onclick: () => move(row, 1) }, "↓"));
-    box.append(row); });
-  const err = h("span", { class: "err" });
-  const form = h("form", { class: "dlg", onsubmit: async ev => {
-    ev.preventDefault(); err.textContent = "";
-    const rows = [...box.querySelectorAll("input")].map(i => ({ old: i.getAttribute("data-old"), name: i.value.trim() }));
-    if (rows.some(r => !r.name)) { err.textContent = "묶음 이름을 비워 둘 수 없습니다."; return; }
-    const order = [...new Set(rows.map(r => r.name))];
-    busy(form, true);
-    const ok = await save("묶음을 저장", async () => { const b = writeBatch(db);
-      S.links.forEach(l => { const r = rows.find(x => x.old === (l.group || "기타")); if (r) b.update(doc(db, "links", l.id), { group: r.name, gorder: order.indexOf(r.name) }); });
-      await b.commit(); });
-    if (ok) closeDlg(); else busy(form, false);
-  } },
-    h("h2", null, "바로가기 묶음 관리"),
-    h("div", { class: "help" }, "이름을 고치면 그 묶음의 바로가기가 모두 새 이름으로 옮겨집니다. 두 묶음에 같은 이름을 적으면 하나로 합쳐집니다. ↑↓로 왼쪽 메뉴에 나오는 순서를 바꿉니다. 새 묶음은 바로가기를 추가하거나 수정할 때 ‘묶음’ 칸에 새 이름을 적으면 생깁니다."),
-    box, dlgFoot(err, "저장"));
-  openDlg(form, true);
 }
 function groupBy(list, order) {
   const g = {}; list.forEach(l => (g[l.group || "기타"] ||= []).push(l));
@@ -819,11 +785,10 @@ function sidebar(roomTitle, roomLinks) {
     h("div", { class: "side-title" }, roomTitle || "공통 바로가기"),
     roomLinks ? toolGroups(roomLinks, ROOM_GROUPS, { open: "all" }) : null,
     roomLinks && !roomLinks.length ? h("div", { class: "small muted", style: "padding:8px" }, "이 과제에 등록된 도구가 없습니다.") : null,
-    toolGroups(common, commonOrder(), { open: roomLinks ? "none" : "first", edit: admin && !roomLinks }),
+    toolGroups(common, GROUPS, { open: roomLinks ? "none" : "first", edit: admin && !roomLinks }),
     !roomLinks && S.loaded.links && !common.length ? h("div", { class: "small muted", style: "padding:8px" }, "등록된 바로가기가 없습니다.") : null,
     admin && !roomLinks ? h("div", { class: "row", style: "padding:6px 4px 0;gap:8px" },
       h("button", { class: "btn", type: "button", onclick: () => editLink(null) }, "바로가기 추가"),
-      common.length ? h("button", { class: "btn", type: "button", onclick: manageGroups }, "묶음 관리") : null,
       S.loaded.links && !common.length ? h("button", { class: "btn", type: "button", onclick: ev => seedLinks(ev.currentTarget) }, "기본 목록 넣기") : null) : null);
 }
 
