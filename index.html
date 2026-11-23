@@ -1342,7 +1342,7 @@ function render() {
 
 function boot() {
   const n = new Date();
-  S.year = n.getMonth() >= 9 ? n.getFullYear() + 1 : n.getFullYear();
+  S.year = n.getFullYear();   // 연구기간 표는 오늘이 속한 해부터 보여 준다
   S.configured = !!(firebaseConfig && firebaseConfig.apiKey && !/여기에|YOUR_|PASTE/.test(firebaseConfig.apiKey));
   render();
   if (!S.configured) return;
