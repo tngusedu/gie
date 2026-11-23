@@ -1,28 +1,7 @@
 {
  "v": 1,
- "updated": "2026-11-23T06:54:08.903Z",
+ "updated": "2026-11-23T07:23:19.017Z",
  "links": [
-  {
-   "id": "dropbox",
-   "label": "Dropbox",
-   "url": "https://www.dropbox.com/home",
-   "group": "협업 도구",
-   "order": 0
-  },
-  {
-   "id": "gdrive",
-   "label": "Google Drive",
-   "url": "https://drive.google.com",
-   "group": "협업 도구",
-   "order": 1
-  },
-  {
-   "id": "goe",
-   "label": "경기도교육청",
-   "url": "https://www.goe.go.kr",
-   "group": "소속 기관",
-   "order": 2
-  },
   {
    "id": "gie",
    "label": "경기도교육연구원",
@@ -138,8 +117,8 @@
  ],
  "rooms": [],
  "admin": {
-  "salt": "cwooDwvgG5eamoDId7xtXw==",
-  "iv": "71l+DeZ3WRds3yI1",
-  "data": "dUizADcxkrLb5hsK5sGzVgZEAB8EotVeAonnEh9atQ=="
+  "salt": "bbfI7V80Ql4hX6Ig2fpiow==",
+  "iv": "Hn+/F9p5YGx4pE8l",
+  "data": "N6tkS1O57gXvcnLQQTypNd8UdGjse8uLErowTKu/4w=="
  }
 }
