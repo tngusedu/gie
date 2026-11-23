@@ -251,6 +251,8 @@ input[type=month]{border:1px solid var(--line);border-radius:7px;padding:7px 10p
 .rcol .tabs button{padding:8px 10px}
 @media (max-width:1240px){.shell3{grid-template-columns:250px minmax(0,1fr)}.shell3 > .rcol{grid-column:2}}
 @media (max-width:820px){.shell3{grid-template-columns:1fr}.shell3 > .rcol{grid-column:auto}}
+.field[hidden]{display:none}
+.list .when.wide{flex-basis:auto;min-width:118px}
 </style>
 </head>
 <body>
@@ -355,6 +357,26 @@ const sortEvents = list => [...(list || [])].sort((a, b) => (a.date + (a.time ||
 const isAdminEmail = e => (ADMIN_EMAILS || []).map(normEmail).includes(e);
 const whoName = (p, email) => !email ? "전체" : ((p.members || []).find(m => normEmail(m.email) === email) || {}).name || (isAdminEmail(email) ? "관리자" : email);
 const isMine = t => !t.assignee || t.assignee === me();
+// 할 일의 일정: 하루(종일) / 시간 지정 / 기간 / 정하지 않음. 예전에 마감일(due)만 넣은 할 일은 '하루'로 본다.
+function sched(t) {
+  const start = t.start || t.due || "", end = t.end && t.end > start ? t.end : start;
+  return { kind: start ? (t.when || "day") : "none", start, end, time: t.when === "time" ? (t.time || "") : "", endTime: t.when === "time" ? (t.endTime || "") : "" };
+}
+function schedDays(t) {
+  const s = sched(t), out = []; if (!s.start) return out;
+  let d = D(s.start); const e = D(s.end);
+  for (let n = 0; d <= e && n < 120; n++) { out.push(iso(d)); d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1); }
+  return out;
+}
+function schedText(t) {
+  const s = sched(t), now = today(), tdy = iso(now);
+  if (!s.start) return { text: "일정 없음", rel: "", late: false, none: true };
+  const text = s.end !== s.start ? `${fmtDay(s.start)} ~ ${fmtDay(s.end)}` : fmtDay(s.start) + (s.time ? ` ${s.time}${s.endTime ? "~" + s.endTime : ""}` : "");
+  const late = !t.done && s.end < tdy; let rel = "";
+  if (!t.done) rel = late ? `${days(D(s.end), now)}일 지남` : s.start > tdy ? `${days(now, D(s.start))}일 뒤` : s.start === s.end ? "오늘" : s.end === tdy ? "오늘까지" : `진행 중 · ${days(now, D(s.end))}일 남음`;
+  return { text, rel, late };
+}
+const schedKey = t => { const s = sched(t); return s.start ? s.start + (s.time || "") : "9999"; };
 let toastT;
 function toast(msg) { const t = $("#toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 5000); }
 async function save(what, fn) {
@@ -547,7 +569,14 @@ async function toggleTodo(p, t, on) {
 function todoDialog(p, t) {
   const isNew = !t; t = t || {};
   const title = h("input", { type: "text", value: t.title || "", required: true, maxlength: 100, placeholder: "예: 설문 문항 초안 작성" });
-  const due = h("input", { type: "date", value: t.due || "" });
+  const s0 = sched(t);
+  const when = h("select", null, [["none", "정하지 않음"], ["day", "하루 (그날 안에)"], ["time", "시간 지정"], ["range", "기간"]].map(([v, l]) => h("option", { value: v }, l)));
+  when.value = isNew ? "day" : s0.kind;
+  const start = h("input", { type: "date", value: s0.start || (isNew ? iso(today()) : "") }), end = h("input", { type: "date", value: s0.kind === "range" ? s0.end : "" });
+  const time = h("input", { type: "time", value: s0.time }), etime = h("input", { type: "time", value: s0.endTime });
+  const fStart = field("날짜", "t-start", start), fEnd = field("끝나는 날", "t-end", end), fTime = field("시작 시간", "t-time", time), fEtime = field("끝나는 시간 (선택)", "t-etime", etime);
+  const showWhen = () => { const k = when.value; fStart.hidden = k === "none"; fEnd.hidden = k !== "range"; fTime.hidden = fEtime.hidden = k !== "time"; fStart.querySelector("label").textContent = k === "range" ? "시작하는 날" : "날짜"; };
+  when.addEventListener("change", showWhen); showWhen();
   const inList = (p.members || []).some(m => normEmail(m.email) === me());
   const who = h("select", null, h("option", { value: "" }, "연구진 전체"), inList ? null : h("option", { value: me() }, "나 (관리자)"), (p.members || []).filter(m => m.email).map(m => h("option", { value: normEmail(m.email) }, `${m.name || m.email}${normEmail(m.email) === me() ? " (나)" : ""}`)));
   who.value = t.assignee || "";
@@ -556,19 +585,26 @@ function todoDialog(p, t) {
   const form = h("form", { class: "dlg", onsubmit: async ev => {
     ev.preventDefault();
     if (!title.value.trim()) { err.textContent = "할 일을 입력해 주세요."; return; }
-    const item = { title: title.value.trim(), due: due.value, assignee: who.value, memo: memo.value.trim(), done: !!t.done, doneBy: t.doneBy || "", doneAt: t.doneAt || "", by: t.by || me(), createdAt: t.createdAt || new Date().toISOString() };
+    const k = when.value;
+    if (k !== "none" && !start.value) { err.textContent = "날짜를 입력해 주세요."; return; }
+    if (k === "range" && (!end.value || end.value < start.value)) { err.textContent = "끝나는 날을 시작하는 날과 같거나 그 뒤로 정해 주세요."; return; }
+    if (k === "time" && !time.value) { err.textContent = "시작 시간을 입력해 주세요."; return; }
+    if (k === "time" && etime.value && etime.value < time.value) { err.textContent = "끝나는 시간이 시작 시간보다 빠릅니다."; return; }
+    const sd = k === "none" ? "" : start.value, ed = k === "range" ? end.value : sd;
+    const item = { title: title.value.trim(), when: k, start: sd, end: ed, time: k === "time" ? time.value : "", endTime: k === "time" ? etime.value : "", due: ed, assignee: who.value, memo: memo.value.trim(), done: !!t.done, doneBy: t.doneBy || "", doneAt: t.doneAt || "", by: t.by || me(), createdAt: t.createdAt || new Date().toISOString() };
     busy(form, true);
     if (await save("할 일을 저장", () => setDoc(doc(db, "projects", p.id, "todos", t.id || "t" + newId()), item))) closeDlg(); else busy(form, false);
   } },
     h("h2", null, isNew ? "할 일 추가" : "할 일 수정"),
     field("할 일", "t-title", title),
-    h("div", { class: "row", style: "align-items:flex-start" }, field("마감일 (선택)", "t-due", due), field("담당", "t-who", who)),
+    h("div", { class: "row", style: "align-items:flex-start" }, field("일정", "t-when", when), field("담당", "t-who", who)),
+    h("div", { class: "row", style: "align-items:flex-start" }, fStart, fEnd, fTime, fEtime),
     field("메모 (선택)", "t-memo", memo),
     dlgFoot(err, "저장", isNew ? null : async () => { if (await save("할 일을 삭제", () => deleteDoc(doc(db, "projects", p.id, "todos", t.id)))) closeDlg(); }));
   openDlg(form);
 }
 function todoRow(p, t, showProject) {
-  const tdy = iso(today()), late = !t.done && t.due && t.due < tdy;
+  const st = schedText(t);
   const can = S.isAdmin || isMine(t);
   return h("li", { class: "todo" + (t.done ? " done" : "") },
     h("input", { type: "checkbox", checked: !!t.done, disabled: !can, "aria-label": `${t.title} 완료`, onchange: ev => toggleTodo(p, t, ev.target.checked) }),
@@ -576,10 +612,10 @@ function todoRow(p, t, showProject) {
       h("span", { class: "ttitle" }, t.title),
       h("span", { class: "small muted", style: "display:block" }, [showProject ? p.title : null, "담당 " + whoName(p, t.assignee), t.done && t.doneBy ? `완료: ${whoName(p, t.doneBy)}` : null].filter(Boolean).join(" · ")),
       t.memo ? h("span", { class: "small", style: "display:block;white-space:pre-wrap" }, t.memo) : null),
-    t.due ? h("span", { class: "due num" + (late ? " late" : "") }, late ? `${fmtDay(t.due)} · ${days(D(t.due), today())}일 지남` : fmtDay(t.due)) : h("span", { class: "due muted" }, "기한 없음"),
+    h("span", { class: "due num" + (st.late ? " late" : st.none ? " muted" : "") }, st.text + (st.rel ? " · " + st.rel : "")),
     S.isAdmin ? h("button", { class: "btn quiet small", type: "button", onclick: () => todoDialog(p, t) }, "수정") : null);
 }
-const sortTodos = list => [...list].sort((a, b) => (a.done - b.done) || (a.due || "9999").localeCompare(b.due || "9999") || (a.createdAt || "").localeCompare(b.createdAt || ""));
+const sortTodos = list => [...list].sort((a, b) => (a.done - b.done) || schedKey(a).localeCompare(schedKey(b)) || (a.createdAt || "").localeCompare(b.createdAt || ""));
 function todosView(p) {
   const all = sortTodos(S.todos[p.id] || []);
   const mine = all.filter(isMine), others = all.filter(t => !isMine(t));
@@ -587,7 +623,7 @@ function todosView(p) {
     list.length ? h("ul", { class: "list" }, list.map(t => todoRow(p, t))) : h("div", { class: "muted small" }, empty));
   return h("div", { class: "stack" },
     S.isAdmin ? h("div", null, h("button", { class: "btn primary", type: "button", onclick: () => todoDialog(p, null) }, "할 일 추가")) : null,
-    S.isAdmin ? sec("남은 할 일", all, "등록된 할 일이 없습니다. ‘할 일 추가’로 담당자와 마감일을 정해 주세요.")
+    S.isAdmin ? sec("남은 할 일", all, "등록된 할 일이 없습니다. ‘할 일 추가’로 담당자와 일정을 정해 주세요.")
       : [sec("내 할 일", mine, "나에게 배정된 할 일이 없습니다."), others.length ? sec("다른 연구진의 할 일", others, "") : null]);
 }
 
@@ -595,8 +631,8 @@ function todosView(p) {
 function taskPanel(title, sub, pick, tabKey, emptyUp) {
   const tdy = iso(today()), all = [];
   for (const p of S.projects) (S.todos[p.id] || []).forEach(t => { if (!t.done && pick(t)) all.push({ p, t }); });
-  all.sort((a, b) => (a.t.due || "9999").localeCompare(b.t.due || "9999"));
-  const late = all.filter(x => x.t.due && x.t.due < tdy), up = all.filter(x => !(x.t.due && x.t.due < tdy));
+  all.sort((a, b) => schedKey(a.t).localeCompare(schedKey(b.t)));
+  const late = all.filter(x => schedText(x.t).late), up = all.filter(x => !schedText(x.t).late);
   const cur = S[tabKey] === "late" ? late : up;
   const tab = (key, label, n, warn) => h("button", { type: "button", role: "tab", "aria-selected": String(S[tabKey] === key), onclick: () => { S[tabKey] = key; render(); } }, label + " ", h("b", { class: "num" + (warn && n ? " late" : "") }, n));
   return h("section", { class: "panel stack", style: "gap:10px" },
@@ -646,26 +682,28 @@ function agenda() {
   const items = [];
   for (const p of S.projects) {
     (p.milestones || []).forEach(m => { if (!m.done && m.date) items.push({ kind: "마감", date: m.date, title: m.label, p }); });
-    (S.todos[p.id] || []).forEach(x => { if (!x.done && (S.isAdmin || isMine(x))) items.push({ kind: "할 일", date: x.due || "", title: x.title, p, todo: x }); });
+    (S.todos[p.id] || []).forEach(x => { if (!x.done && (S.isAdmin || isMine(x))) { const sc = sched(x), stx = schedText(x); items.push({ kind: "할 일", date: sc.start && sc.start < tdy && !stx.late ? tdy : sc.start, time: sc.time, late: stx.late, title: x.title, p, todo: x, stx }); } });
     (S.events[p.id] || []).forEach(e => { if (e.date >= tdy) items.push({ kind: "회의", date: e.date, time: e.time || "", title: e.title, p, ev: e }); });
   }
   const kinds = ["전체", "마감", "할 일", "회의"];
   const shown = items.filter(i => S.filter === "전체" || i.kind === S.filter).sort((a, b) => ((a.date || "9999") + (a.time || "")).localeCompare((b.date || "9999") + (b.time || "")));
-  const groups = [["기한 지남", shown.filter(i => i.date && i.date < tdy)], ["오늘부터 7일 이내", shown.filter(i => i.date >= tdy && i.date <= soon)], ["그 이후", shown.filter(i => i.date > soon)], ["기한 없음", shown.filter(i => !i.date)]];
+  const isLate = i => i.todo ? i.late : !!i.date && i.date < tdy;
+  const groups = [["일정 지남", shown.filter(isLate)], ["오늘부터 7일 이내", shown.filter(i => !isLate(i) && i.date && i.date <= soon)], ["그 이후", shown.filter(i => !isLate(i) && i.date > soon)], ["일정 없음", shown.filter(i => !i.date)]];
   const row = i => h("li", { class: "todo" },
     i.todo ? h("input", { type: "checkbox", "aria-label": `${i.title} 완료`, onchange: ev => toggleTodo(i.p, i.todo, ev.target.checked) }) : h("span", { style: "flex:0 0 18px" }),
     h("span", { class: "kind k-" + (i.kind === "마감" ? "ms" : i.kind === "회의" ? "ev" : "td") }, i.kind),
     h("span", { style: "flex:1;min-width:0" }, h("span", { class: "ttitle" }, i.title),
       h("a", { class: "small", style: "display:block", href: "#p-" + i.p.id + (i.kind === "회의" ? "-cal" : i.kind === "할 일" ? "-todo" : "") },
         [i.p.title, i.todo ? "담당 " + whoName(i.p, i.todo.assignee) : null, i.ev ? [timeOf(i.ev), i.ev.place].filter(Boolean).join(" · ") : null].filter(Boolean).join(" · "))),
-    i.date ? h("span", { class: "due num" + (i.date < tdy ? " late" : "") }, i.date < tdy ? `${fmtDay(i.date)} · ${days(D(i.date), t)}일 지남` : i.date === tdy ? "오늘" : `${fmtDay(i.date)} · ${days(t, D(i.date))}일 뒤`) : null);
+    i.todo ? (i.date ? h("span", { class: "due num" + (i.late ? " late" : "") }, i.stx.text + (i.stx.rel ? " · " + i.stx.rel : "")) : null)
+    : i.date ? h("span", { class: "due num" + (i.date < tdy ? " late" : "") }, i.date < tdy ? `${fmtDay(i.date)} · ${days(D(i.date), t)}일 지남` : i.date === tdy ? "오늘" : `${fmtDay(i.date)} · ${days(t, D(i.date))}일 뒤`) : null);
   return h("section", { class: "panel stack", style: "gap:12px" },
     h("div", { class: "row spread" },
       h("div", null, h("h2", null, S.isAdmin ? "전체 마감·할 일" : "내 할 일과 일정"),
         h("div", { class: "small muted" }, S.isAdmin ? "모든 과제의 마감, 끝나지 않은 할 일, 다가오는 회의입니다." : "내가 참여하는 과제의 마감, 나에게 배정된 할 일, 다가오는 회의입니다.")),
       h("div", { class: "filters" }, kinds.map(k => h("button", { type: "button", "aria-pressed": String(S.filter === k), onclick: () => { S.filter = k; render(); } }, k === "전체" ? `전체 ${items.length}` : `${k} ${items.filter(i => i.kind === k).length}`)))),
     shown.length ? groups.filter(g => g[1].length).map(([name, list]) => h("div", { class: "stack", style: "gap:2px" },
-      h("div", { class: "gname" + (name === "기한 지남" ? " late" : "") }, `${name} ${list.length}건`), h("ul", { class: "list" }, list.map(row))))
+      h("div", { class: "gname" + (name === "일정 지남" ? " late" : "") }, `${name} ${list.length}건`), h("ul", { class: "list" }, list.map(row))))
       : h("div", { class: "muted small" }, "표시할 항목이 없습니다."));
 }
 
@@ -713,7 +751,7 @@ function calendarView(p) {
   const { y, m } = S.cal;
   const first = new Date(y, m, 1), dim = new Date(y, m + 1, 0).getDate();
   const move = n => { const d = new Date(y, m + n, 1); S.cal = { y: d.getFullYear(), m: d.getMonth() }; render(); };
-  const events = sortEvents(S.events[p.id]), ms = p.milestones || [], todos = (S.todos[p.id] || []).filter(x => x.due);
+  const events = sortEvents(S.events[p.id]), ms = p.milestones || [], todos = (S.todos[p.id] || []).map(x => ({ x, days: schedDays(x), s: sched(x) })).filter(o => o.days.length);
   const monthKey = `${y}-${String(m + 1).padStart(2, "0")}`;
   const cells = [];
   for (let i = 0; i < first.getDay(); i++) cells.push(h("div", { class: "cell off" }));
@@ -726,7 +764,7 @@ function calendarView(p) {
         admin ? h("button", { class: "addday", type: "button", "aria-label": `${m + 1}월 ${day}일에 일정 추가`, onclick: () => eventDialog(p, null, key) }, "+") : null),
       marks.map(x => h("span", { class: "cev mark" }, x)),
       ms.filter(x => x.date === key).map(x => h("span", { class: "cev ms2", title: x.label }, "◆ " + x.label)),
-      todos.filter(x => x.due === key).map(x => h("span", { class: "cev td2" + (x.done ? " done" : ""), title: `${x.title} · 담당 ${whoName(p, x.assignee)}` }, (x.done ? "☑ " : "☐ ") + x.title)),
+      todos.filter(o => o.days.includes(key)).map(({ x, s }) => h("span", { class: "cev td2" + (x.done ? " done" : ""), title: `${x.title} · ${schedText(x).text} · 담당 ${whoName(p, x.assignee)}` }, (x.done ? "☑ " : "☐ ") + (s.time ? s.time + " " : "") + x.title)),
       events.filter(e => e.date === key).map(e => h("button", { class: "cev", type: "button", title: [timeOf(e), e.title, e.place].filter(Boolean).join(" · "), onclick: () => eventDialog(p, e) }, (e.time ? e.time + " " : "") + e.title))));
   }
   while (cells.length % 7) cells.push(h("div", { class: "cell off" }));
@@ -741,7 +779,7 @@ function calendarView(p) {
           h("button", { class: "btn quiet", type: "button", onclick: () => { S.cal = { y: t.getFullYear(), m: t.getMonth() }; render(); } }, "오늘")),
         admin ? h("button", { class: "btn primary", type: "button", onclick: () => eventDialog(p, null, monthKey === iso(t).slice(0, 7) ? iso(t) : monthKey + "-01") }, "일정 추가") : null),
       h("div", { class: "calwrap" }, h("div", { class: "cal" }, WEEK.map((w, i) => h("div", { class: "dow" + (i === 0 ? " sun" : "") }, w)), cells)),
-      h("div", { class: "legend" }, h("span", null, "■ 회의·일정"), h("span", null, "◆ 마감·주요 일정"), h("span", null, "☐ 할 일 마감"))),
+      h("div", { class: "legend" }, h("span", null, "■ 회의·일정"), h("span", null, "◆ 마감·주요 일정"), h("span", null, "☐ 할 일"))),
     h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `${m + 1}월 회의·일정 ${monthEvents.length}건`),
       monthEvents.length ? h("ul", { class: "list" }, monthEvents.map(e => h("li", null, h("span", { class: "when wide num" }, fmtDay(e.date)),
         h("span", { style: "flex:1;min-width:0" }, h("b", { style: "font-weight:600" }, e.title),
@@ -1061,13 +1099,16 @@ function allCalendar(embed) {
   for (const p of S.projects) {
     (S.events[p.id] || []).forEach(e => items.push({ kind: "ev", date: e.date, time: e.time || "", title: e.title, p, e }));
     (p.milestones || []).forEach(x => { if (x.date) items.push({ kind: "ms", date: x.date, time: "", title: x.label, p, done: x.done }); });
-    (S.todos[p.id] || []).forEach(x => { if (x.due && (admin || isMine(x))) items.push({ kind: "td", date: x.due, time: "", title: x.title, p, done: x.done, who: whoName(p, x.assignee) }); });
+    (S.todos[p.id] || []).forEach(x => { if (!(admin || isMine(x))) return; const sc = sched(x), ds = schedDays(x);
+      ds.forEach((d, n) => items.push({ kind: "td", date: d, time: sc.time, title: x.title, p, done: x.done, who: whoName(p, x.assignee), span: ds.length > 1 ? schedText(x).text : "", cont: n > 0 })); });
   }
   if (connected) G.items.filter(g => !sent.has(g.id)).forEach(g => items.push({ kind: "g", date: g.date, time: g.time, title: g.title, g }));
   const inMonth = items.filter(i => (i.date || "").startsWith(monthKey)).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
+  const seenTd = new Set();
+  const listItems = inMonth.filter(i => { if (i.kind !== "td" || !i.span) return true; const k = i.p.id + "|" + i.title + "|" + i.span; if (seenTd.has(k)) return false; seenTd.add(k); return true; });
   const chip = i => i.kind === "ev" ? h("button", { class: "cev pj", type: "button", style: `--c:${tileColor(i.p.title)}`, title: [i.p.title, timeOf(i.e), i.title, i.e.place].filter(Boolean).join(" · "), onclick: () => eventDialog(i.p, i.e) }, (i.time ? i.time + " " : "") + i.title)
     : i.kind === "ms" ? h("span", { class: "cev ms2", title: `${i.p.title} · ${i.title}` }, "◆ " + i.title)
-    : i.kind === "td" ? h("span", { class: "cev td2" + (i.done ? " done" : ""), title: `${i.p.title} · ${i.title} · 담당 ${i.who}` }, (i.done ? "☑ " : "☐ ") + i.title)
+    : i.kind === "td" ? h("span", { class: "cev td2" + (i.done ? " done" : ""), title: `${i.p.title} · ${i.title}${i.span ? " · " + i.span : ""} · 담당 ${i.who}` }, (i.done ? "☑ " : "☐ ") + (i.time ? i.time + " " : "") + i.title)
     : h("a", { class: "cev gc", href: i.g.link || "https://calendar.google.com", target: "_blank", rel: "noopener", title: [i.time, i.title, i.g.place].filter(Boolean).join(" · ") }, (i.time ? i.time + " " : "") + i.title);
   const cells = [];
   for (let i = 0; i < first.getDay(); i++) cells.push(h("div", { class: "cell off" }));
@@ -1096,15 +1137,15 @@ function allCalendar(embed) {
         h("button", { class: "btn quiet", type: "button", onclick: () => { S.acal = { y: t.getFullYear(), m: t.getMonth() }; render(); } }, "오늘")),
       h("div", { class: "calwrap" }, h("div", { class: "cal" + (embed ? " compact" : "") }, WEEK.map((w, i) => h("div", { class: "dow" + (i === 0 ? " sun" : "") }, w)), cells)),
       h("div", { class: "legend" }, S.projects.map(p => h("span", null, h("i", { class: "lg-bar", style: `--c:${tileColor(p.title)}` }), p.title)),
-        h("span", null, "◆ 마감·주요 일정"), h("span", null, "☐ 할 일 마감"), connected ? h("span", null, h("i", { class: "lg-bar gcbar" }), "Google 캘린더") : null));
+        h("span", null, "◆ 마감·주요 일정"), h("span", null, "☐ 할 일"), connected ? h("span", null, h("i", { class: "lg-bar gcbar" }), "Google 캘린더") : null));
   if (embed) return gridSec;
   return h("div", { class: "stack" },
-    h("div", null, h("h1", null, admin ? "전체 캘린더" : "내 캘린더"), h("div", { class: "muted" }, admin ? "모든 과제의 회의, 마감, 할 일 마감을 한 달력에 모았습니다." : "내가 참여하는 과제의 회의, 마감, 내 할 일 마감입니다.")),
+    h("div", null, h("h1", null, admin ? "전체 캘린더" : "내 캘린더"), h("div", { class: "muted" }, admin ? "모든 과제의 회의, 마감, 할 일을 한 달력에 모았습니다." : "내가 참여하는 과제의 회의, 마감, 내 할 일입니다.")),
     gPanel,
     gridSec,
-    h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `${m + 1}월 일정 ${inMonth.length}건`),
-      inMonth.length ? h("ul", { class: "list" }, inMonth.map(i => h("li", { class: "todo" },
-        h("span", { class: "when wide num" }, fmtDay(i.date)), h("span", { class: "kind " + kindCls[i.kind] }, kindName[i.kind]),
+    h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `${m + 1}월 일정 ${listItems.length}건`),
+      listItems.length ? h("ul", { class: "list" }, listItems.map(i => h("li", { class: "todo" },
+        h("span", { class: "when wide num" }, i.span || fmtDay(i.date)), h("span", { class: "kind " + kindCls[i.kind] }, kindName[i.kind]),
         h("span", { style: "flex:1;min-width:0" }, h("span", { class: "ttitle" }, i.title),
           h("span", { class: "small muted", style: "display:block" }, [i.p ? i.p.title : "내 Google 캘린더", i.e ? timeOf(i.e) : i.time, i.e ? i.e.place : i.g ? i.g.place : null, i.who ? "담당 " + i.who : null].filter(Boolean).join(" · "))),
         i.kind === "ev" ? (i.e.gcalId && admin ? h("span", { class: "small muted" }, "Google에 보냄") : gAddLink(i.p, i.e)) : i.kind === "g" && i.g.link ? h("a", { class: "small", href: i.g.link, target: "_blank", rel: "noopener" }, "Google에서 열기") : null)))
