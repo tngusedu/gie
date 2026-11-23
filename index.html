@@ -236,6 +236,8 @@ input[type=month]{border:1px solid var(--line);border-radius:7px;padding:7px 10p
 .cal.compact .cell{min-height:78px}
 .wstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px 20px}
 .wstat{border-left:3px solid var(--line);padding-left:12px}
+.tile.has-img{background:#fff;border:1px solid var(--line);padding:3px}
+.tile img{width:100%;height:100%;object-fit:contain;display:block;border-radius:4px}
 </style>
 </head>
 <body>
@@ -325,7 +327,17 @@ function typeColor(type) {
   return `var(--t${(Math.max(0, [...base, ...extra].indexOf(type || "기타")) % 5) + 1})`;
 }
 function tileColor(label) { let n = 0; for (const ch of String(label)) n = (n * 31 + ch.codePointAt(0)) % 997; return `var(--t${n % 5 + 1})`; }
-const tile = label => h("span", { class: "tile", style: `--c:${tileColor(label)}`, "aria-hidden": "true" }, [...String(label).trim()][0] || "·");
+// 아이콘: 직접 지정한 이미지가 있으면 그것을, 없으면 연결된 사이트의 공식 아이콘(파비콘)을 쓴다. 불러오지 못하면 이름 첫 글자 타일이 그대로 남는다.
+const iconSrc = v => { v = String(v || "").trim(); return /^https:\/\//i.test(v) ? safeUrl(v) : /^[\w\-./]+\.(png|svg|jpe?g|webp|ico|gif)$/i.test(v) && !v.includes("..") ? v : ""; };
+function tile(label, url, icon) {
+  const el = h("span", { class: "tile", style: `--c:${tileColor(label)}`, "aria-hidden": "true" }, [...String(label).trim()][0] || "·");
+  const custom = iconSrc(icon), hst = host(url);
+  const src = custom || (hst ? `https://www.google.com/s2/favicons?sz=64&domain=${encodeURIComponent(hst)}` : "");
+  if (src) { const img = new Image(); img.alt = "";
+    img.onload = () => { if (custom || img.naturalWidth > 16) { el.replaceChildren(img); el.classList.add("has-img"); } };   // 16px짜리는 '아이콘 없음' 기본 그림이라 쓰지 않는다
+    img.src = src; }
+  return el;
+}
 const sortEvents = list => [...(list || [])].sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
 const isAdminEmail = e => (ADMIN_EMAILS || []).map(normEmail).includes(e);
 const whoName = (p, email) => !email ? "전체" : ((p.members || []).find(m => normEmail(m.email) === email) || {}).name || (isAdminEmail(email) ? "관리자" : email);
@@ -424,7 +436,8 @@ function editProject(p) {
   const addLink = l => { const row = h("div", { class: "subrow" },
       h("input", { type: "text", placeholder: "묶음", value: l.group || "협업", list: "rgroups", "data-k": "group", maxlength: 20, "aria-label": "묶음", style: "flex:0 0 84px;min-width:84px" }),
       h("input", { type: "text", placeholder: "이름 (예: 플로우)", value: l.label || "", "data-k": "label", maxlength: 40, "aria-label": "이름" }),
-      h("input", { type: "url", placeholder: "https://", value: l.url || "", "data-k": "url", "aria-label": "주소" }));
+      h("input", { type: "url", placeholder: "https://", value: l.url || "", "data-k": "url", "aria-label": "주소" }),
+      h("input", { type: "text", placeholder: "아이콘 (선택)", value: l.icon || "", "data-k": "icon", maxlength: 300, "aria-label": "아이콘 이미지", style: "flex:1 1 110px" }));
     row.append(rm(row)); lBox.append(row); };
   const addMs = m => { const row = h("div", { class: "subrow" },
       h("input", { type: "date", value: m.date || "", "data-k": "date", "aria-label": "날짜" }),
@@ -441,12 +454,12 @@ function editProject(p) {
     const members = rows(mBox, ["name", "email", "role", "org"]).filter(m => m.name || m.email).map(m => ({ ...m, email: normEmail(m.email) }));
     const bad = members.find(m => m.email && !validEmail(m.email));
     if (bad) { err.textContent = `메일 주소를 확인해 주세요: ${bad.email}`; return; }
-    const rawLinks = rows(lBox, ["group", "label", "url"]).filter(l => l.label && l.url);
+    const rawLinks = rows(lBox, ["group", "label", "url", "icon"]).filter(l => l.label && l.url);
     if (rawLinks.some(l => !safeUrl(l.url))) { err.textContent = "도구 주소는 https:// 로 시작해야 합니다."; return; }
     const id = p.id || "p" + newId();
     const data = {
       title: title.value.trim(), type: type.value, start: start.value, end: end.value, notice: notice.value.trim(),
-      links: rawLinks.map(l => ({ group: l.group || "기타", label: l.label, url: safeUrl(l.url) })),
+      links: rawLinks.map(l => ({ group: l.group || "기타", label: l.label, url: safeUrl(l.url), icon: iconSrc(l.icon) })),
       members, memberEmails: [...new Set(members.map(m => m.email).filter(Boolean))],   // 이 목록에 있는 메일만 과제를 열 수 있다 (보안 규칙이 확인)
       milestones: rows(sBox, ["date", "label", "done"]).filter(m => m.label).sort((a, b) => (a.date || "9").localeCompare(b.date || "9")),
       notices: p.notices || [],
@@ -731,24 +744,62 @@ function editLink(l) {
   const label = h("input", { type: "text", value: l.label || "", required: true, maxlength: 60 });
   const url = h("input", { type: "url", value: l.url || "", required: true, placeholder: "https://" });
   const group = h("input", { type: "text", value: l.group || "", list: "groups", maxlength: 30 });
+  const icon = h("input", { type: "text", value: l.icon || "", maxlength: 300, placeholder: "비워 두면 사이트의 공식 아이콘을 자동으로 씁니다" });
   const err = h("span", { class: "err" });
   const form = h("form", { class: "dlg", onsubmit: async ev => {
     ev.preventDefault();
     const u = safeUrl(url.value);
     if (!label.value.trim() || !u) { err.textContent = "이름과 https:// 주소를 입력해 주세요."; return; }
+    if (icon.value.trim() && !iconSrc(icon.value)) { err.textContent = "아이콘은 https:// 이미지 주소나 icons/dropbox.png 같은 파일 경로로 적어 주세요."; return; }
     busy(form, true);
-    if (await save("바로가기를 저장", () => setDoc(doc(db, "links", l.id || "l" + newId()), { label: label.value.trim(), url: u, group: group.value.trim() || "기타", order: l.order ?? Date.now() }))) closeDlg(); else busy(form, false);
+    if (await save("바로가기를 저장", () => setDoc(doc(db, "links", l.id || "l" + newId()), { label: label.value.trim(), url: u, group: group.value.trim() || "기타", icon: iconSrc(icon.value), order: l.order ?? Date.now(), ...gorderOf(group.value.trim() || "기타") }))) closeDlg(); else busy(form, false);
   } },
     h("h2", null, isNew ? "공통 바로가기 추가" : "공통 바로가기 수정"),
     h("div", { class: "help" }, "공통 바로가기는 로그인하지 않은 사람에게도 보입니다. 과제별 폴더 주소는 ‘과제 수정’에 넣어 주세요."),
     field("이름", "k-label", label), field("주소", "k-url", url), field("묶음", "k-group", group),
-    h("datalist", { id: "groups" }, GROUPS.map(g => h("option", { value: g }))),
+    field("아이콘 이미지 (선택)", "k-icon", icon),
+    h("div", { class: "help" }, "직접 지정하려면 이미지 주소(https://…)를 넣거나, GitHub 저장소에 icons 폴더를 만들어 이미지를 올린 뒤 icons/dropbox.png 처럼 적습니다."),
+    h("datalist", { id: "groups" }, [...new Set([...commonOrder(), ...GROUPS])].map(g => h("option", { value: g }))),
     dlgFoot(err, "저장", isNew ? null : async () => { if (await save("바로가기를 삭제", () => deleteDoc(doc(db, "links", l.id)))) closeDlg(); }));
   openDlg(form, true);
 }
 async function seedLinks(btn) {
   btn.disabled = true;
   await save("기본 바로가기를 넣", async () => { const b = writeBatch(db); SEED_LINKS.forEach(([label, url, group], i) => b.set(doc(db, "links", "s" + i), { label, url, group, order: i })); await b.commit(); });
+}
+// 공통 바로가기 묶음의 순서: 관리자가 정한 순서(gorder)가 있으면 그것을, 없으면 기본 순서를 따른다
+function commonOrder() {
+  const pos = {};
+  S.links.forEach(l => { const g = l.group || "기타", d = GROUPS.indexOf(g), v = typeof l.gorder === "number" ? l.gorder : (d < 0 ? 900 : 100 + d); if (!(g in pos) || v < pos[g]) pos[g] = v; });
+  return Object.keys(pos).sort((a, b) => pos[a] - pos[b] || a.localeCompare(b));
+}
+function gorderOf(g) { const m = S.links.filter(l => (l.group || "기타") === g && typeof l.gorder === "number").map(l => l.gorder); return m.length ? { gorder: Math.min(...m) } : {}; }
+function manageGroups() {
+  const box = h("div", { class: "stack", style: "gap:8px" });
+  const count = g => S.links.filter(l => (l.group || "기타") === g).length;
+  const move = (row, dir) => { const sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling; if (!sib) return; if (dir < 0) box.insertBefore(row, sib); else box.insertBefore(sib, row); };
+  commonOrder().forEach(g => { const row = h("div", { class: "subrow", style: "flex-wrap:nowrap" },
+      h("input", { type: "text", value: g, maxlength: 30, "aria-label": "묶음 이름", "data-old": g }),
+      h("span", { class: "small muted num", style: "flex:0 0 40px" }, `${count(g)}개`),
+      h("button", { class: "btn", type: "button", "aria-label": `${g} 위로`, onclick: () => move(row, -1) }, "↑"),
+      h("button", { class: "btn", type: "button", "aria-label": `${g} 아래로`, onclick: () => move(row, 1) }, "↓"));
+    box.append(row); });
+  const err = h("span", { class: "err" });
+  const form = h("form", { class: "dlg", onsubmit: async ev => {
+    ev.preventDefault(); err.textContent = "";
+    const rows = [...box.querySelectorAll("input")].map(i => ({ old: i.getAttribute("data-old"), name: i.value.trim() }));
+    if (rows.some(r => !r.name)) { err.textContent = "묶음 이름을 비워 둘 수 없습니다."; return; }
+    const order = [...new Set(rows.map(r => r.name))];
+    busy(form, true);
+    const ok = await save("묶음을 저장", async () => { const b = writeBatch(db);
+      S.links.forEach(l => { const r = rows.find(x => x.old === (l.group || "기타")); if (r) b.update(doc(db, "links", l.id), { group: r.name, gorder: order.indexOf(r.name) }); });
+      await b.commit(); });
+    if (ok) closeDlg(); else busy(form, false);
+  } },
+    h("h2", null, "바로가기 묶음 관리"),
+    h("div", { class: "help" }, "이름을 고치면 그 묶음의 바로가기가 모두 새 이름으로 옮겨집니다. 두 묶음에 같은 이름을 적으면 하나로 합쳐집니다. ↑↓로 왼쪽 메뉴에 나오는 순서를 바꿉니다. 새 묶음은 바로가기를 추가하거나 수정할 때 ‘묶음’ 칸에 새 이름을 적으면 생깁니다."),
+    box, dlgFoot(err, "저장"));
+  openDlg(form, true);
 }
 function groupBy(list, order) {
   const g = {}; list.forEach(l => (g[l.group || "기타"] ||= []).push(l));
@@ -758,7 +809,7 @@ function toolGroups(list, order, opts) {
   return groupBy(list, order).map(([name, items], i) => h("details", { open: opts.open === "all" || (opts.open === "first" && i < 2) },
     h("summary", null, name),
     items.map(l => { const u = safeUrl(l.url);
-      const a = h("a", { class: "tool", href: u || "#home", target: u ? "_blank" : null, rel: "noopener", title: host(u) }, tile(l.label), h("span", { class: "nm" }, l.label));
+      const a = h("a", { class: "tool", href: u || "#home", target: u ? "_blank" : null, rel: "noopener", title: host(u) }, tile(l.label, l.url, l.icon), h("span", { class: "nm" }, l.label));
       return opts.edit ? h("div", { class: "toolrow" }, a, h("button", { class: "btn quiet small", type: "button", onclick: () => editLink(l) }, "수정")) : a; })));
 }
 function sidebar(roomTitle, roomLinks) {
@@ -768,10 +819,11 @@ function sidebar(roomTitle, roomLinks) {
     h("div", { class: "side-title" }, roomTitle || "공통 바로가기"),
     roomLinks ? toolGroups(roomLinks, ROOM_GROUPS, { open: "all" }) : null,
     roomLinks && !roomLinks.length ? h("div", { class: "small muted", style: "padding:8px" }, "이 과제에 등록된 도구가 없습니다.") : null,
-    toolGroups(common, GROUPS, { open: roomLinks ? "none" : "first", edit: admin && !roomLinks }),
+    toolGroups(common, commonOrder(), { open: roomLinks ? "none" : "first", edit: admin && !roomLinks }),
     !roomLinks && S.loaded.links && !common.length ? h("div", { class: "small muted", style: "padding:8px" }, "등록된 바로가기가 없습니다.") : null,
     admin && !roomLinks ? h("div", { class: "row", style: "padding:6px 4px 0;gap:8px" },
       h("button", { class: "btn", type: "button", onclick: () => editLink(null) }, "바로가기 추가"),
+      common.length ? h("button", { class: "btn", type: "button", onclick: manageGroups }, "묶음 관리") : null,
       S.loaded.links && !common.length ? h("button", { class: "btn", type: "button", onclick: ev => seedLinks(ev.currentTarget) }, "기본 목록 넣기") : null) : null);
 }
 
@@ -881,7 +933,7 @@ function viewRoom(id, tab) {
     p.notice ? h("section", { class: "panel stack", style: "gap:8px" }, h("h2", null, "안내"), h("p", { class: "notice" }, p.notice)) : null,
     h("section", { class: "stack", style: "gap:12px" }, h("h2", null, "이 과제의 도구"),
       links.length ? h("div", { class: "cards" }, links.map(l => h("a", { class: "card", href: safeUrl(l.url), target: "_blank", rel: "noopener" },
-        tile(l.label), h("span", { style: "min-width:0" }, h("b", null, l.label), h("span", { class: "host" }, host(l.url))))))
+        tile(l.label, l.url, l.icon), h("span", { style: "min-width:0" }, h("b", null, l.label), h("span", { class: "host" }, host(l.url))))))
         : h("div", { class: "panel muted" }, admin ? "‘과제 수정’에서 이 과제의 Dropbox·Google Drive 폴더와 협업 도구 주소를 넣어 주세요." : "아직 등록된 도구가 없습니다.")),
     h("div", { class: "cols" },
       h("section", { class: "panel stack", style: "gap:10px" }, h("h2", null, "연구 일정"),
