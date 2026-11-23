@@ -233,6 +233,9 @@ input[type=month]{border:1px solid var(--line);border-radius:7px;padding:7px 10p
 .tabs button[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--ink)}
 .tabs b.late{color:var(--crit)}
 .nrow{padding:11px 4px}
+.cal.compact .cell{min-height:78px}
+.wstats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px 20px}
+.wstat{border-left:3px solid var(--line);padding-left:12px}
 </style>
 </head>
 <body>
@@ -277,7 +280,7 @@ const S = {
   configured: false, authReady: false, user: null, isAdmin: false,
   projects: [], todos: {}, events: {}, links: [], types: null,
   loaded: { projects: false, links: false }, denied: false, redirected: false,
-  year: null, cal: null, acal: null, filter: "전체", workMounted: false, workFlush: null, tabMine: "up", tabReq: "up",
+  year: null, cal: null, acal: null, filter: "전체", workMounted: false, workFlush: null, tabMine: "up", tabReq: "up", work: null, workState: "loading",
 };
 let auth = null, db = null;
 const subs = { base: [], per: {} };
@@ -388,6 +391,9 @@ function watchProjects() {
     if (!S.isAdmin && !S.redirected && S.projects.length === 1 && !/^#p-/.test(location.hash)) { S.redirected = true; location.hash = "p-" + S.projects[0].id; return; }
     S.redirected = true; render();
   }, onDenied));
+  if (S.isAdmin) { const n = new Date();
+    subs.base.push(onSnapshot(doc(db, "worktime", `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`),
+      s => { S.work = s.exists() ? s.data() : null; S.workState = "ok"; render(); }, () => { S.workState = "denied"; render(); })); }
   subs.base.push(onSnapshot(doc(db, "meta", "types"), s => { S.types = s.exists() ? s.data().list : null; render(); }, () => {}));
 }
 function watchLinks() {
@@ -839,6 +845,8 @@ function viewHome() {
           h("button", { class: "btn", type: "button", onclick: manageTypes }, "과제 유형 관리"),
           h("button", { class: "btn primary", type: "button", onclick: () => editProject(null) }, "과제 추가")) : null),
       dayCard([h("b", null, S.loaded.projects ? `${admin ? "등록된" : "참여"} 과제 ${rooms.length}건` : "과제 불러오는 중…"), h("span", { class: "small muted" }, "왼쪽 목록의 도구를 누르면 새 창으로 열립니다.")]),
+      admin ? workPanel() : null,
+      S.loaded.projects && (admin || rooms.length) ? allCalendar(true) : null,
       admin && S.loaded.projects && rooms.length ? [
         taskPanel("내가 담당 중인 업무", "나에게 배정된 할 일입니다.", t => t.assignee === me(), "tabMine", "예정된 업무가 없습니다. 과제의 ‘할 일’ 탭에서 담당을 ‘나 (관리자)’로 정하면 여기에 모입니다."),
         taskPanel("내가 요청한 업무", "내가 연구진에게 배정한 할 일입니다.", t => t.assignee !== me() && (!t.by || t.by === me()), "tabReq", "요청한 업무가 없습니다.")] : null,
@@ -974,7 +982,7 @@ async function gSync() {
 }
 
 /* ---------- 화면: 전체 캘린더 ---------- */
-function allCalendar() {
+function allCalendar(embed) {
   const admin = S.isAdmin, t = today(), tdy = iso(t);
   if (!S.acal) S.acal = { y: t.getFullYear(), m: t.getMonth() };
   const { y, m } = S.acal, connected = admin && !!gToken();
@@ -1012,18 +1020,21 @@ function allCalendar() {
         : h("button", { class: "btn primary", type: "button", onclick: gConnect }, "Google 캘린더 연결")),
     connected && G.err ? h("div", { class: "err" }, gErrText(G.err)) : null,
     h("div", { class: "small muted" }, "보내는 대상은 각 과제 달력의 회의·일정입니다(30일 전부터 이후). 이미 보낸 일정은 다시 만들지 않고, 사이트에서 고친 일정만 Google 쪽도 고칩니다. 마감·할 일은 보내지 않습니다."));
-  return h("div", { class: "stack" },
-    h("div", null, h("h1", null, admin ? "전체 캘린더" : "내 캘린더"), h("div", { class: "muted" }, admin ? "모든 과제의 회의, 마감, 할 일 마감을 한 달력에 모았습니다." : "내가 참여하는 과제의 회의, 마감, 내 할 일 마감입니다.")),
-    gPanel,
-    h("section", { class: "panel stack", style: "gap:14px" },
+  const gridSec = h("section", { class: "panel stack", style: "gap:14px" },
+      embed ? h("div", { class: "row spread" }, h("h2", null, admin ? "전체 캘린더" : "내 캘린더"), h("a", { class: "small", href: "#calendar" }, connected || !admin ? "크게 보기" : "크게 보기 · Google 캘린더 연결")) : null,
       h("div", { class: "yearnav" },
         h("button", { class: "btn", type: "button", "aria-label": "이전 달", onclick: () => move(-1) }, "←"),
         h("strong", { class: "num", style: "min-width:120px" }, `${y}년 ${m + 1}월`),
         h("button", { class: "btn", type: "button", "aria-label": "다음 달", onclick: () => move(1) }, "→"),
         h("button", { class: "btn quiet", type: "button", onclick: () => { S.acal = { y: t.getFullYear(), m: t.getMonth() }; render(); } }, "오늘")),
-      h("div", { class: "calwrap" }, h("div", { class: "cal" }, WEEK.map((w, i) => h("div", { class: "dow" + (i === 0 ? " sun" : "") }, w)), cells)),
+      h("div", { class: "calwrap" }, h("div", { class: "cal" + (embed ? " compact" : "") }, WEEK.map((w, i) => h("div", { class: "dow" + (i === 0 ? " sun" : "") }, w)), cells)),
       h("div", { class: "legend" }, S.projects.map(p => h("span", null, h("i", { class: "lg-bar", style: `--c:${tileColor(p.title)}` }), p.title)),
-        h("span", null, "◆ 마감·주요 일정"), h("span", null, "☐ 할 일 마감"), connected ? h("span", null, h("i", { class: "lg-bar gcbar" }), "Google 캘린더") : null)),
+        h("span", null, "◆ 마감·주요 일정"), h("span", null, "☐ 할 일 마감"), connected ? h("span", null, h("i", { class: "lg-bar gcbar" }), "Google 캘린더") : null));
+  if (embed) return gridSec;
+  return h("div", { class: "stack" },
+    h("div", null, h("h1", null, admin ? "전체 캘린더" : "내 캘린더"), h("div", { class: "muted" }, admin ? "모든 과제의 회의, 마감, 할 일 마감을 한 달력에 모았습니다." : "내가 참여하는 과제의 회의, 마감, 내 할 일 마감입니다.")),
+    gPanel,
+    gridSec,
     h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `${m + 1}월 일정 ${inMonth.length}건`),
       inMonth.length ? h("ul", { class: "list" }, inMonth.map(i => h("li", { class: "todo" },
         h("span", { class: "when wide num" }, fmtDay(i.date)), h("span", { class: "kind " + kindCls[i.kind] }, kindName[i.kind]),
@@ -1031,6 +1042,34 @@ function allCalendar() {
           h("span", { class: "small muted", style: "display:block" }, [i.p ? i.p.title : "내 Google 캘린더", i.e ? timeOf(i.e) : i.time, i.e ? i.e.place : i.g ? i.g.place : null, i.who ? "담당 " + i.who : null].filter(Boolean).join(" · "))),
         i.kind === "ev" ? (i.e.gcalId && admin ? h("span", { class: "small muted" }, "Google에 보냄") : gAddLink(i.p, i.e)) : i.kind === "g" && i.g.link ? h("a", { class: "small", href: i.g.link, target: "_blank", rel: "noopener" }, "Google에서 열기") : null)))
         : h("div", { class: "muted small" }, "이 달에 일정이 없습니다.")));
+}
+
+/* ---------- 첫 화면의 근무시간 요약 (관리자 전용) ---------- */
+function workTotals(rows) {
+  let total = 0, hol = 0, vac = 0;
+  (rows || []).forEach(x => {
+    if (x.holiday) { total += 480; hol++; return; }
+    if (x.vacation) { total += 480; vac++; return; }
+    const inM = toMin(x.inTime), outM = toMin(x.outTime);
+    if (inM !== null && outM !== null && outM > inM) { const raw = outM - inM, b = breakInfo(raw, inM, outM); total += raw - b.mand - Math.min(x.autoBreak || 0, b.autoMax); }
+    total += Math.round((x.vacHour || 0) * 60);
+  });
+  return { total, hol, vac };
+}
+function workPanel() {
+  const n = new Date(), y = n.getFullYear(), m = n.getMonth() + 1, std = stdHours(y, m);
+  const rows = (S.work && S.work.rows) || [], w = workTotals(rows), diff = w.total - std * 60;
+  const td = rows.find(x => x.day === n.getDate());
+  const todayText = !td ? "오늘 기록 없음" : td.holiday ? "오늘: 공휴일" : td.vacation ? "오늘: 연차" : td.inTime || td.outTime ? `오늘: ${td.inTime || "미입력"} ~ ${td.outTime || "미입력"}` : "오늘 기록 없음";
+  const stat = (label, value, color) => h("div", { class: "wstat" }, h("div", { class: "small muted", style: "font-weight:600" }, label), h("div", { class: "sval num", style: color ? `color:${color}` : null }, value));
+  return h("section", { class: "panel stack", style: "gap:12px" },
+    h("div", { class: "row spread" },
+      h("div", { class: "row", style: "gap:8px" }, h("h2", null, `${m}월 근무시간`), h("span", { class: "only" }, "관리자에게만 보입니다")),
+      h("a", { class: "btn", href: "#work" }, "근무시간 입력")),
+    S.workState === "denied" ? h("div", { class: "err" }, "근무시간 기록을 읽을 권한이 없습니다. 새 firestore.rules를 Firebase 규칙 탭에 게시해 주세요.")
+      : S.workState === "loading" ? h("div", { class: "muted small" }, "불러오는 중입니다…")
+      : h("div", { class: "wstats" }, stat("총 근무시간", fmtHM(w.total)), stat("기준 근무시간", std + "h"), stat("초과/부족", (diff >= 0 ? "+" : "-") + fmtHM(diff), diff >= 0 ? "var(--ok)" : "var(--crit)"),
+          stat("공휴일 · 연차", `${w.hol}일 · ${w.vac}일`), h("div", { class: "wstat" }, h("div", { class: "small muted", style: "font-weight:600" }, "오늘"), h("div", { class: "num", style: "font-weight:600;padding-top:6px" }, todayText.replace(/^오늘:? ?/, "") || "기록 없음"))));
 }
 
 /* ---------- 화면: 근무시간 (관리자 전용) ---------- */
