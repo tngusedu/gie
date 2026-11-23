@@ -155,7 +155,7 @@ textarea{min-height:72px;resize:vertical}
 #toast[hidden]{display:none}
 
 @media (max-width:820px){
-  .shell{grid-template-columns:1fr}
+  .shell{grid-template-columns:minmax(0,1fr)}
   .shell > .side{order:2}
   .tl-head{display:none}
   .tl-row{grid-template-columns:1fr;gap:0;padding:10px 0}
@@ -203,7 +203,6 @@ input[type=time]{border:1px solid var(--line);border-radius:7px;padding:7px 10px
 .cev.td2{background:transparent;color:var(--ink);border:1px solid var(--line)}
 .cev.td2.done{color:var(--muted);text-decoration:line-through}
 a.pitem{text-decoration:none}
-@media (max-width:820px){.list li.todo{flex-wrap:wrap}.due{flex-basis:100%;padding-left:28px}}
 .nav{display:flex;gap:2px;flex-wrap:wrap}
 .nav a{padding:5px 10px;border-radius:7px;text-decoration:none;color:var(--muted);font-weight:500}
 .nav a[aria-current="page"]{color:var(--ink);background:var(--soft)}
@@ -246,13 +245,18 @@ input[type=month]{border:1px solid var(--line);border-radius:7px;padding:7px 10p
 .rcol .tl-row{grid-template-columns:1fr;gap:0;padding:10px 0}
 .rcol .tl-label{padding:0 0 2px}
 .rcol .track{height:40px}.rcol .bar{top:9px}.rcol .ms{top:14px}
-.rcol .list li.todo{flex-wrap:wrap}
-.rcol .due{flex:1 1 60%;padding-left:28px;white-space:normal}
 .rcol .tabs button{padding:8px 10px}
 @media (max-width:1240px){.shell3{grid-template-columns:250px minmax(0,1fr)}.shell3 > .rcol{grid-column:2}}
-@media (max-width:820px){.shell3{grid-template-columns:1fr}.shell3 > .rcol{grid-column:auto}}
+@media (max-width:820px){.shell3{grid-template-columns:minmax(0,1fr)}.shell3 > .rcol{grid-column:auto}}
 .field[hidden]{display:none}
 .list .when.wide{flex-basis:auto;min-width:118px}
+/* 할 일·일정 줄: 제목은 항상 넉넉한 폭을 갖고, 일정 문구는 자리가 모자라면 아랫줄로 내려간다 */
+.list li.todo{flex-wrap:wrap}
+.tmain{flex:1 1 12em;min-width:min(12em,100%)}
+.due{white-space:normal;text-align:right}
+.rcol .tmain{flex-basis:calc(100% - 110px)}
+.rcol .due{flex:1 1 50%;text-align:left;padding-left:28px}
+@media (max-width:820px){.tmain{flex-basis:calc(100% - 110px)}.due{flex:1 1 50%;text-align:left;padding-left:28px}}
 </style>
 </head>
 <body>
@@ -608,7 +612,7 @@ function todoRow(p, t, showProject) {
   const can = S.isAdmin || isMine(t);
   return h("li", { class: "todo" + (t.done ? " done" : "") },
     h("input", { type: "checkbox", checked: !!t.done, disabled: !can, "aria-label": `${t.title} 완료`, onchange: ev => toggleTodo(p, t, ev.target.checked) }),
-    h("span", { style: "flex:1;min-width:0" },
+    h("span", { class: "tmain" },
       h("span", { class: "ttitle" }, t.title),
       h("span", { class: "small muted", style: "display:block" }, [showProject ? p.title : null, "담당 " + whoName(p, t.assignee), t.done && t.doneBy ? `완료: ${whoName(p, t.doneBy)}` : null].filter(Boolean).join(" · ")),
       t.memo ? h("span", { class: "small", style: "display:block;white-space:pre-wrap" }, t.memo) : null),
@@ -692,7 +696,7 @@ function agenda() {
   const row = i => h("li", { class: "todo" },
     i.todo ? h("input", { type: "checkbox", "aria-label": `${i.title} 완료`, onchange: ev => toggleTodo(i.p, i.todo, ev.target.checked) }) : h("span", { style: "flex:0 0 18px" }),
     h("span", { class: "kind k-" + (i.kind === "마감" ? "ms" : i.kind === "회의" ? "ev" : "td") }, i.kind),
-    h("span", { style: "flex:1;min-width:0" }, h("span", { class: "ttitle" }, i.title),
+    h("span", { class: "tmain" }, h("span", { class: "ttitle" }, i.title),
       h("a", { class: "small", style: "display:block", href: "#p-" + i.p.id + (i.kind === "회의" ? "-cal" : i.kind === "할 일" ? "-todo" : "") },
         [i.p.title, i.todo ? "담당 " + whoName(i.p, i.todo.assignee) : null, i.ev ? [timeOf(i.ev), i.ev.place].filter(Boolean).join(" · ") : null].filter(Boolean).join(" · "))),
     i.todo ? (i.date ? h("span", { class: "due num" + (i.late ? " late" : "") }, i.stx.text + (i.stx.rel ? " · " + i.stx.rel : "")) : null)
@@ -1146,7 +1150,7 @@ function allCalendar(embed) {
     h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `${m + 1}월 일정 ${listItems.length}건`),
       listItems.length ? h("ul", { class: "list" }, listItems.map(i => h("li", { class: "todo" },
         h("span", { class: "when wide num" }, i.span || fmtDay(i.date)), h("span", { class: "kind " + kindCls[i.kind] }, kindName[i.kind]),
-        h("span", { style: "flex:1;min-width:0" }, h("span", { class: "ttitle" }, i.title),
+        h("span", { class: "tmain" }, h("span", { class: "ttitle" }, i.title),
           h("span", { class: "small muted", style: "display:block" }, [i.p ? i.p.title : "내 Google 캘린더", i.e ? timeOf(i.e) : i.time, i.e ? i.e.place : i.g ? i.g.place : null, i.who ? "담당 " + i.who : null].filter(Boolean).join(" · "))),
         i.kind === "ev" ? (i.e.gcalId && admin ? h("span", { class: "small muted" }, "Google에 보냄") : gAddLink(i.p, i.e)) : i.kind === "g" && i.g.link ? h("a", { class: "small", href: i.g.link, target: "_blank", rel: "noopener" }, "Google에서 열기") : null)))
         : h("div", { class: "muted small" }, "이 달에 일정이 없습니다.")));
