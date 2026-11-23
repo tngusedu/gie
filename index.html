@@ -274,8 +274,10 @@ function status(p) {
   if (t > e) return { key: "done", label: "종료", note: "" };
   return { key: "live", label: "진행 중", note: `${days(t, e)}일 남음` };
 }
+const typesList = () => (S.admin && Array.isArray(S.admin.types) && S.admin.types.length ? S.admin.types : TYPES);
 function typeColor(type) {
-  const all = S.admin ? [...new Set(S.admin.projects.map(p => p.type || "기타"))].sort() : [];
+  const base = typesList(), extra = S.admin ? [...new Set(S.admin.projects.map(p => p.type || "기타"))].filter(x => !base.includes(x)).sort() : [];
+  const all = [...base, ...extra];
   return `var(--t${(Math.max(0, all.indexOf(type || "기타")) % 5) + 1})`;
 }
 function tileColor(label) { let n = 0; for (const ch of String(label)) n = (n * 31 + ch.codePointAt(0)) % 997; return `var(--t${n % 5 + 1})`; }
@@ -359,7 +361,7 @@ async function exportData(btn) {
   try {
     const rooms = [];
     for (const p of S.admin.projects) { const { password, ...content } = p; rooms.push({ id: p.id, title: p.title, ...(await seal(content, password)) }); }
-    const out = { v: 1, updated: new Date().toISOString(), links: S.data.links || [], rooms, admin: await seal({ projects: S.admin.projects }, S.adminPw) };
+    const out = { v: 1, updated: new Date().toISOString(), links: S.data.links || [], rooms, admin: await seal({ projects: S.admin.projects, types: typesList() }, S.adminPw) };
     const a = h("a", { href: URL.createObjectURL(new Blob([JSON.stringify(out, null, 1)], { type: "application/json" })), download: "data.json" });
     document.body.append(a); a.click(); a.remove();
     S.data = out; S.dirty = 0; render();
@@ -390,12 +392,13 @@ function enterRoom(room, tab) {
 /* ---------- 과제 편집 (관리자) ---------- */
 function editProject(p) {
   const isNew = !p;
-  p = p || { type: TYPES[0], milestones: [], members: [], events: [], links: [
+  p = p || { type: typesList()[0], milestones: [], members: [], events: [], links: [
     { group: "협업", label: "Dropbox 폴더", url: "" }, { group: "협업", label: "Google Drive 폴더", url: "" },
     { group: "기관", label: "경기도교육청", url: "https://www.goe.go.kr" }, { group: "기관", label: "경기도교육연구원", url: "https://www.gie.re.kr" }] };
   const y = S.year;
   const title = h("input", { type: "text", value: p.title || "", required: true, maxlength: 120 });
-  const type = h("input", { type: "text", value: p.type || "", list: "types", maxlength: 30 });
+  const typeOpts = typesList().includes(p.type) || !p.type ? typesList() : [p.type, ...typesList()];
+  const type = h("select", null, typeOpts.map(o => h("option", { value: o }, o))); type.value = p.type || typeOpts[0];
   const start = h("input", { type: "date", value: p.start || (isNew ? `${y}-01-01` : "") });
   const end = h("input", { type: "date", value: p.end || (isNew ? `${y}-12-31` : "") });
   const pw = h("input", { type: "text", autocomplete: "off", value: p.password || "", maxlength: 64, placeholder: "6자 이상" });
@@ -452,7 +455,6 @@ function editProject(p) {
     h("div", { class: "stack", style: "gap:8px" }, h("span", { class: "flabel" }, "주요 일정 (착수·중간·최종보고 등)"), sBox,
       h("div", null, h("button", { class: "btn", type: "button", onclick: () => addMs({}) }, "일정 추가"))),
     h("div", { class: "help" }, "회의 일정은 과제의 ‘달력’ 화면에서 날짜를 눌러 넣습니다."),
-    h("datalist", { id: "types" }, TYPES.map(t => h("option", { value: t }))),
     h("datalist", { id: "roles" }, ROLES.map(t => h("option", { value: t }))),
     h("datalist", { id: "rgroups" }, ROOM_GROUPS.map(t => h("option", { value: t }))),
     dlgFoot(err, "확인", isNew ? null : async () => {
@@ -460,6 +462,34 @@ function editProject(p) {
       S.admin.projects = S.admin.projects.filter(x => x.id !== p.id); closeDlg(); location.hash = "home"; changed();
     }));
   openDlg(form);
+}
+
+/* ---------- 과제 유형 관리 (관리자) ---------- */
+function manageTypes() {
+  const box = h("div", { class: "stack", style: "gap:8px" });
+  const count = name => S.admin.projects.filter(p => p.type === name).length;
+  const add = (name, old) => { const row = h("div", { class: "subrow" },
+      h("input", { type: "text", value: name, maxlength: 30, placeholder: "유형 이름", "aria-label": "유형 이름", "data-old": old || "" }),
+      h("span", { class: "small muted num", style: "flex:0 0 64px" }, old ? `과제 ${count(old)}건` : "새 유형"),
+      h("button", { class: "btn quiet", type: "button", onclick: () => row.remove() }, "지우기"));
+    box.append(row); return row; };
+  typesList().forEach(t => add(t, t));
+  const err = h("span", { class: "err" });
+  openDlg(h("form", { class: "dlg", onsubmit: ev => {
+    ev.preventDefault(); err.textContent = "";
+    const rows = [...box.querySelectorAll("input")].map(i => ({ name: i.value.trim(), old: i.getAttribute("data-old") })).filter(r => r.name);
+    const names = rows.map(r => r.name);
+    if (!names.length) { err.textContent = "유형을 하나 이상 남겨 주세요."; return; }
+    if (new Set(names).size !== names.length) { err.textContent = "같은 이름의 유형이 있습니다."; return; }
+    const renames = rows.filter(r => r.old && r.old !== r.name);
+    S.admin.projects.forEach(p => { const r = renames.find(x => x.old === p.type); if (r) p.type = r.name; });   // 이름을 바꾸면 그 유형의 과제도 함께 바뀐다
+    S.admin.types = names; closeDlg(); changed();
+  } },
+    h("h2", null, "과제 유형 관리"),
+    h("div", { class: "help" }, "이름을 고치면 그 유형으로 지정된 과제도 함께 바뀝니다. 목록에서 지운 유형으로 지정돼 있던 과제는 기존 유형 이름을 그대로 유지하니, 필요하면 ‘과제 수정’에서 다른 유형으로 바꿔 주세요. 목록 순서대로 일정표 색이 정해집니다."),
+    box,
+    h("div", null, h("button", { class: "btn", type: "button", onclick: () => add("", "").querySelector("input").focus() }, "유형 추가")),
+    dlgFoot(err, "확인")), true);
 }
 
 /* ---------- 달력 일정 ---------- */
@@ -647,7 +677,9 @@ function viewHome() {
     h("div", { class: "stack" },
       h("div", { class: "row spread" },
         h("div", null, h("h1", null, "연구과제"), h("div", { class: "muted" }, admin ? "관리자 모드입니다. 과제를 누르면 바로 들어갑니다." : "참여하는 과제를 누르고 비밀번호를 입력하세요.")),
-        admin ? h("button", { class: "btn primary", type: "button", onclick: () => editProject(null) }, "과제 추가") : null),
+        admin ? h("div", { class: "row", style: "gap:8px" },
+          h("button", { class: "btn", type: "button", onclick: manageTypes }, "과제 유형 관리"),
+          h("button", { class: "btn primary", type: "button", onclick: () => editProject(null) }, "과제 추가")) : null),
       h("div", { class: "daycard" },
         h("div", { class: "calbox" }, h("div", { class: "mon" }, (n.getMonth() + 1) + "월"), h("div", { class: "dd num" }, n.getDate()), h("div", { class: "small" }, WEEK[n.getDay()] + "요일")),
         h("div", { class: "info" }, h("b", null, `등록된 과제 ${rooms.length}건`), h("span", { class: "small muted" }, "왼쪽 목록의 도구를 누르면 새 창으로 열립니다."))),
