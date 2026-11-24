@@ -363,6 +363,16 @@ body{word-break:keep-all;overflow-wrap:anywhere}
 .sw[aria-pressed="true"]{box-shadow:0 0 0 2px var(--ink)}
 .pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:0 28px}
 .pgrid .pitem{border-bottom:1px solid var(--line)}
+.navcnt{color:var(--muted);font-weight:400}
+.app{grid-template-columns:236px minmax(0,1fr)}
+.railtools{display:flex;flex-direction:column;gap:0}
+.railtools details{padding:2px 0}
+.railtools summary{cursor:pointer;color:var(--muted);font-size:13px;font-weight:600;padding:5px 10px;border-radius:6px}
+.railtools .tool{padding:5px 10px;gap:8px}
+.railtools .tool:hover{background:var(--soft)}
+.railtools .tile{flex-basis:22px;width:22px;height:22px;border-radius:6px;font-size:11px}
+.railtools .nm{font-weight:400;font-size:14px}
+@media (max-width:820px){.app{grid-template-columns:minmax(0,1fr)}.railtools{flex-basis:100%}}
 </style>
 </head>
 <body>
@@ -404,7 +414,7 @@ const S = {
   configured: false, authReady: false, user: null, isAdmin: false,
   projects: [], todos: {}, events: {}, links: [], types: null,
   loaded: { projects: false, links: false }, denied: false, redirected: false,
-  year: null, cal: null, acal: null, filter: "전체", workMounted: false, workFlush: null, tabMine: "up", tabReq: "up", work: null, workState: "loading", more: {}, mini: null, me: null,
+  year: null, cal: null, acal: null, filter: "전체", workMounted: false, workFlush: null, tabMine: "up", tabReq: "up", work: null, workState: "loading", more: {}, mini: null, me: null, railOpen: {},
 };
 let auth = null, db = null;
 const subs = { base: [], per: {} };
@@ -1483,8 +1493,7 @@ function viewHome() {
     h("div", null, h("div", { class: "muted num" }, dateLine), h("h1", null, "연구과제 관리")),
     h("section", { class: "panel stack", style: "gap:12px;max-width:560px" }, h("h2", null, "Google 계정으로 로그인"),
       h("p", { class: "muted", style: "margin:0" }, "관리자가 등록한 메일의 Google 계정으로 로그인하면 참여하는 과제로 바로 이동합니다. 비밀번호를 따로 입력하지 않습니다."),
-      h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "Google 계정으로 로그인"))),
-    linksSection());
+      h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "Google 계정으로 로그인"))));
   const admin = S.isAdmin, tdy = iso(today());
   const rooms = [...S.projects].sort((a, b) => a.title.localeCompare(b.title));
   loadWeather();
@@ -1495,7 +1504,7 @@ function viewHome() {
       h("button", { class: "btn", type: "button", onclick: () => personalDialog(null) }, "내 일정 추가"),
       h("button", { class: "btn", type: "button", onclick: manageTypes }, "과제 유형 관리"),
       h("button", { class: "btn primary", type: "button", onclick: () => editProject(null) }, "과제 추가")) : null);
-  if (!S.loaded.projects) return h("div", { class: "stack" }, head, h("div", { class: "panel muted" }, "과제를 불러오는 중입니다…"), linksSection());
+  if (!S.loaded.projects) return h("div", { class: "stack" }, head, h("div", { class: "panel muted" }, "과제를 불러오는 중입니다…"));
   const mine = openTasks(t => admin ? t.assignee === me() : isMine(t));
   const todayN = rooms.reduce((a, p) => a + (S.events[p.id] || []).filter(e => e.date === tdy).length, 0) + mine.filter(x => schedDays(x.t).includes(tdy)).length + (admin ? meItems().filter(it => it.kind !== "work" && schedDays(it).includes(tdy)).length : 0);
   const lateN = openTasks(t => admin || isMine(t)).filter(x => schedText(x.t).late).length;
@@ -1504,13 +1513,11 @@ function viewHome() {
   const stat = (label, v, warn) => h("span", { class: "sitem" }, h("span", { class: "muted" }, label), h("b", { class: "num" + (warn && v ? " late" : "") }, v));
   hello.replaceChildren(greetLine({ late: lateN, today: todayN, projects: rooms.length }), weatherLine());
   const strip = h("div", { class: "strip" }, stat("오늘 일정", todayN), stat("지연된 할 일", lateN, true), stat("7일 안 마감", msN), stat(admin ? "과제" : "참여 과제", rooms.length), admin && leaveStats().set ? stat("연가 잔여", dayN(leaveStats().annualLeft) + "일") : null);
-  const plist = h("section", { class: "panel stack", style: "gap:4px" }, h("div", { style: "padding-bottom:6px" }, h("h2", null, admin ? "과제" : "내 과제")),
-    rooms.length ? h("div", { class: "plist pgrid" }, rooms.map(r => { const c = (S.todos[r.id] || []).filter(t => !t.done && (admin || isMine(t))).length;
-        return h("a", { class: "pitem", href: "#p-" + r.id }, projTile(r), h("span", { class: "ptitle" }, r.title), h("span", { class: "lock" }, c ? `할 일 ${c}건` : "할 일 없음")); }))
-      : h("div", { class: "muted small" }, admin ? "아직 과제가 없습니다. ‘과제 추가’를 눌러 과제명·연구기간·연구진 메일을 넣어 주세요." : `${me()} 계정으로 등록된 과제가 없습니다. 관리자에게 이 메일 주소를 연구진으로 등록해 달라고 요청해 주세요.`));
+  const noProj = rooms.length ? null : h("section", { class: "panel muted" }, admin ? "아직 과제가 없습니다. ‘과제 추가’를 눌러 과제명·연구기간·연구진 메일을 넣어 주세요. 등록한 과제는 왼쪽 메뉴에 나옵니다."
+    : `${me()} 계정으로 등록된 과제가 없습니다. 관리자에게 이 메일 주소를 연구진으로 등록해 달라고 요청해 주세요.`);
   // 일의 흐름대로: 전체 파악 → 내가 할 일 → 맡긴 일 (오른쪽에는 일정·근무) → 공지 → 과제 현황 → 도구
   const mineCard = taskCard(admin ? "내가 담당 중인 업무" : "내 할 일", t => admin ? t.assignee === me() : isMine(t), "mine", admin ? "담당 중인 업무가 없습니다. 과제의 ‘할 일’ 탭에서 담당을 ‘나 (관리자)’로 정하거나, ‘내 일정 추가’로 회사 업무를 넣으면 여기에 모입니다." : "지금 나에게 배정된 할 일이 없습니다.");
-  return h("div", { class: "stack" }, head, strip,
+  return h("div", { class: "stack" }, head, strip, noProj,
     h("div", { class: "dash" },
       h("div", { class: "stack" },
         rooms.length || (admin && meItems().length) ? agenda() : null,
@@ -1518,9 +1525,7 @@ function viewHome() {
         admin ? taskCard("내가 요청한 업무", t => t.assignee !== me() && (!t.by || t.by === me()), "req", "요청한 업무가 없습니다.") : null),
       h("div", { class: "stack" }, upcomingCard(), miniCal(), admin ? workCard() : null, admin ? leaveCard() : null)),
     noticesCard(),
-    plist,
-    admin ? timeline() : null,
-    linksSection());
+    admin ? timeline() : null);
 }
 
 /* ---------- 화면: 과제 ---------- */
@@ -1876,6 +1881,31 @@ function mountWork() {
   return node;
 }
 
+/* ---------- 왼쪽 바의 공통 바로가기 ---------- */
+function railTools() {   // 과제 화면에서는 보이지 않는다 (과제 화면은 그 과제의 도구만)
+  const order = commonOrder(), common = [...S.links].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  if (!common.length && !S.isAdmin) return null;
+  return h("div", { class: "railtools" },
+    h("div", { class: "navlabel row spread", style: "flex-wrap:nowrap" }, h("span", null, "바로가기"), S.isAdmin ? h("button", { class: "linkbtn", type: "button", onclick: manageLinks }, "관리") : null),
+    order.map((g, n) => { const d = h("details", { open: S.railOpen[g] ?? n < 2 }, h("summary", null, g),
+        common.filter(l => (l.group || "기타") === g).map(l => { const u = safeUrl(l.url); return h("a", { class: "tool", href: u || "#home", target: u ? "_blank" : null, rel: "noopener", title: host(u) }, tile(l.label, l.url, l.icon), h("span", { class: "nm" }, l.label)); }));
+      d.addEventListener("toggle", () => { S.railOpen[g] = d.open; }); return d; }),
+    !common.length ? h("div", { class: "small muted", style: "padding:4px 10px" }, "‘관리’에서 바로가기를 넣어 주세요.") : null);
+}
+function manageLinks() {
+  const order = commonOrder(), common = [...S.links].sort((a, b) => order.indexOf(a.group || "기타") - order.indexOf(b.group || "기타") || (a.order ?? 0) - (b.order ?? 0));
+  openDlg(h("div", { class: "dlg" }, h("h2", null, "바로가기 관리"),
+    h("div", { class: "row", style: "gap:8px" },
+      h("button", { class: "btn primary", type: "button", onclick: () => editLink(null) }, "바로가기 추가"),
+      common.length ? h("button", { class: "btn", type: "button", onclick: manageGroups }, "묶음 이름·순서") : null,
+      !common.length ? h("button", { class: "btn", type: "button", onclick: async ev => { await seedLinks(ev.currentTarget); closeDlg(); } }, "기본 목록 넣기") : null),
+    common.length ? h("ul", { class: "list" }, common.map(l => h("li", { style: "align-items:center" }, tile(l.label, l.url, l.icon),
+        h("span", { style: "flex:1;min-width:0" }, h("span", { style: "font-weight:500;overflow-wrap:anywhere" }, l.label), h("span", { class: "small muted", style: "display:block" }, `${l.group || "기타"} · ${host(l.url)}`)),
+        h("button", { class: "btn quiet small", type: "button", onclick: () => editLink(l) }, "수정"))))
+      : h("div", { class: "muted small" }, "등록된 바로가기가 없습니다."),
+    h("div", { class: "row", style: "justify-content:flex-end" }, h("button", { class: "btn", type: "button", onclick: closeDlg }, "닫기"))));
+}
+
 /* ---------- 그리기 ---------- */
 function render() {
   const hdr = $("#hdr"), app = $("#app");
@@ -1891,9 +1921,10 @@ function render() {
   const isRoom = /^p-/.test(hash0);
   hdr.replaceChildren(h("a", { class: "brand", href: "#home" }, "연구과제 관리"), ...(S.user ? [
       h("nav", { class: "nav", "aria-label": "화면" }, navA("home", "홈", !isRoom && hash0 !== "calendar" && hash0 !== "work"), navA("calendar", S.isAdmin ? "전체 캘린더" : "내 캘린더", hash0 === "calendar"), S.isAdmin ? navA("work", "근무시간", hash0 === "work") : null),
-      S.projects.length ? h("nav", { class: "nav", "aria-label": "과제" }, h("div", { class: "navlabel" }, "과제"), [...S.projects].sort((a, b) => a.title.localeCompare(b.title)).map(p => h("a", { class: "navp", href: "#p-" + p.id, "aria-current": hash0 === "p-" + p.id || hash0.startsWith("p-" + p.id + "-") ? "page" : null }, projTile(p), h("span", { style: "min-width:0" }, p.title)))) : null,
+      S.projects.length ? h("nav", { class: "nav", "aria-label": "과제" }, h("div", { class: "navlabel" }, "과제"), [...S.projects].sort((a, b) => a.title.localeCompare(b.title)).map(p => h("a", { class: "navp", href: "#p-" + p.id, "aria-current": hash0 === "p-" + p.id || hash0.startsWith("p-" + p.id + "-") ? "page" : null }, projTile(p), h("span", { style: "min-width:0" }, p.title, (n => n ? h("span", { class: "navcnt num", title: `남은 할 일 ${n}건` }, ` (${n})`) : null)((S.todos[p.id] || []).filter(t => !t.done && (S.isAdmin || isMine(t))).length))))) : null,
+      isRoom ? null : railTools(),
       h("div", { class: "railfoot" }, h("span", { class: "who" }, `${S.user.name || S.user.email}${S.isAdmin ? " · 관리자" : ""}`), h("button", { class: "btn quiet", type: "button", onclick: () => signOut(auth) }, "로그아웃"))]
-    : [h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "로그인"))]));
+    : [h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "로그인")), railTools()]));
   if (hash0 === "work" && S.isAdmin) {   // 입력 중인 표가 다시 그려져 지워지지 않도록 한 번만 만든다
     if (!S.workMounted) { S.workMounted = true; app.replaceChildren(mountWork()); }
     return;
