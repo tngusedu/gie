@@ -402,7 +402,7 @@ const S = {
   configured: false, authReady: false, user: null, isAdmin: false,
   projects: [], todos: {}, events: {}, links: [], types: null,
   loaded: { projects: false, links: false }, denied: false, redirected: false,
-  year: null, cal: null, acal: null, filter: "전체", workMounted: false, workFlush: null, tabMine: "up", tabReq: "up", work: null, workState: "loading", more: {}, mini: null,
+  year: null, cal: null, acal: null, filter: "전체", workMounted: false, workFlush: null, tabMine: "up", tabReq: "up", work: null, workState: "loading", more: {}, mini: null, me: null,
 };
 let auth = null, db = null;
 const subs = { base: [], per: {} };
@@ -623,7 +623,8 @@ function watchProjects() {
   }, onDenied));
   if (S.isAdmin) { const n = new Date();
     subs.base.push(onSnapshot(doc(db, "worktime", `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`),
-      s => { S.work = s.exists() ? s.data() : null; S.workState = "ok"; render(); }, () => { S.workState = "denied"; render(); })); }
+      s => { S.work = s.exists() ? s.data() : null; S.workState = "ok"; render(); }, () => { S.workState = "denied"; render(); }));
+    subs.base.push(onSnapshot(doc(db, "worktime", "personal"), s => { S.me = s.exists() ? s.data() : { items: [], leave: {} }; render(); }, () => {})); }
   subs.base.push(onSnapshot(doc(db, "meta", "types"), s => { S.types = s.exists() ? s.data().list : null; render(); }, () => {}));
 }
 function watchLinks() {
@@ -784,9 +785,11 @@ function manageTypes() {
 
 /* ---------- 할 일 ---------- */
 async function toggleTodo(p, t, on) {
+  if (p.id === "_me") return toggleMe(t.id, on);
   await save("할 일을 바꾸", () => updateDoc(doc(db, "projects", p.id, "todos", t.id), { done: on, doneBy: on ? me() : "", doneAt: on ? new Date().toISOString() : "" }));
 }
 function todoDialog(p, t) {
+  if (p.id === "_me") return personalDialog(meItems().find(x => x.id === t.id) || null);
   const isNew = !t; t = t || {};
   const title = h("input", { type: "text", value: t.title || "", required: true, maxlength: 100, placeholder: "예: 설문 문항 초안 작성" });
   const s0 = sched(t);
@@ -948,7 +951,10 @@ function agenda() {
     (S.todos[p.id] || []).forEach(x => { if (!x.done && (S.isAdmin || isMine(x))) { const sc = sched(x), stx = schedText(x); items.push({ kind: "할 일", date: sc.start && sc.start < tdy && !stx.late ? tdy : sc.start, time: sc.time, late: stx.late, title: x.title, p, todo: x, stx }); } });
     (S.events[p.id] || []).forEach(e => { if (e.date >= tdy) items.push({ kind: "회의", date: e.date, time: e.time || "", title: e.title, p, ev: e }); });
   }
-  const kinds = ["전체", "마감", "할 일", "회의"];
+  if (S.isAdmin) meItems().forEach(it => { const sc = sched(it), stx = schedText(it);
+    if (it.kind === "work") { if (!it.done) { const t0 = meTasks().find(x => x.id === it.id); items.push({ kind: "할 일", date: sc.start && sc.start < tdy && !stx.late ? tdy : sc.start, time: sc.time, late: stx.late, title: it.title, p: MEP, todo: t0, stx }); } }
+    else if (sc.start && sc.end >= tdy) items.push({ kind: "내 일정", date: sc.start < tdy ? tdy : sc.start, time: sc.time, title: meTitle(it), p: MEP, me: it }); });
+  const kinds = S.isAdmin && meItems().some(it => it.kind !== "work") ? ["전체", "마감", "할 일", "회의", "내 일정"] : ["전체", "마감", "할 일", "회의"];
   const shown = items.filter(i => S.filter === "전체" || i.kind === S.filter).sort((a, b) => ((a.date || "9999") + (a.time || "")).localeCompare((b.date || "9999") + (b.time || "")));
   const isLate = i => i.todo ? i.late : !!i.date && i.date < tdy;
   const groups = [["일정 지남", shown.filter(isLate)], ["오늘부터 7일 이내", shown.filter(i => !isLate(i) && i.date && i.date <= soon)], ["그 이후", shown.filter(i => !isLate(i) && i.date > soon)], ["일정 없음", shown.filter(i => !i.date)]];
@@ -956,7 +962,8 @@ function agenda() {
     i.todo ? h("input", { type: "checkbox", "aria-label": `${i.title} 완료`, onchange: ev => toggleTodo(i.p, i.todo, ev.target.checked) }) : h("span", { style: "flex:0 0 18px" }),
     h("span", { class: "kind k-" + (i.kind === "마감" ? "ms" : i.kind === "회의" ? "ev" : "td") }, i.kind),
     h("span", { class: "tmain" }, h("span", { class: "ttitle" }, i.title),
-      h("a", { class: "small", style: "display:block", href: "#p-" + i.p.id + (i.kind === "회의" ? "-cal" : i.kind === "할 일" ? "-todo" : "") },
+      i.p.id === "_me" ? h("button", { class: "linkbtn", type: "button", style: "display:block", onclick: () => personalDialog(i.me || meItems().find(x => x.id === i.todo.id)) }, i.me ? [PKIND[i.me.kind], schedText(i.me).text, i.me.place].filter(Boolean).join(" · ") : PKIND.work)
+      : h("a", { class: "small", style: "display:block", href: "#p-" + i.p.id + (i.kind === "회의" ? "-cal" : i.kind === "할 일" ? "-todo" : "") },
         [i.p.title, i.todo ? "담당 " + whoName(i.p, i.todo.assignee) : null, i.ev ? [timeOf(i.ev), i.ev.place].filter(Boolean).join(" · ") : null].filter(Boolean).join(" · "))),
     i.todo ? (i.date ? h("span", { class: "due num" + (i.late ? " late" : "") }, i.stx.text + (i.stx.rel ? " · " + i.stx.rel : "")) : null)
     : i.date ? h("span", { class: "due num" + (i.date < tdy ? " late" : "") }, i.date < tdy ? `${fmtDay(i.date)} · ${days(D(i.date), t)}일 지남` : i.date === tdy ? "오늘" : `${fmtDay(i.date)} · ${days(t, D(i.date))}일 뒤`) : null);
@@ -1181,6 +1188,109 @@ function dayCard(lines) {
     h("div", { class: "calbox" }, h("div", { class: "mon" }, (n.getMonth() + 1) + "월"), h("div", { class: "dd num" }, n.getDate()), h("div", { class: "small" }, WEEK[n.getDay()] + "요일")),
     h("div", { class: "info" }, lines));
 }
+/* ---------- 내 일정: 과제에 속하지 않는 회사 업무·행사, 연가·병가 (관리자 전용) ---------- */
+const PKIND = { work: "회사 업무", event: "행사", annual: "연가", sick: "병가", etc: "기타" };
+const PCOLOR = { work: "#3b55a6", event: "#b3581e", annual: "#2c7a4b", sick: "#a86200", etc: "#5d6d7e" };
+const MEP = { id: "_me", title: "개인·회사", members: [], color: "#5d6d7e" };   // 과제가 아닌 항목을 담는 가상의 묶음
+const isLeave = k => k === "annual" || k === "sick";
+const meItems = () => (S.me && S.me.items) || [];
+const meLeave = () => (S.me && S.me.leave) || {};
+const meVars = it => `--c:${PCOLOR[it.kind] || PCOLOR.etc};--ci:#ffffff`;
+const meTitle = it => isLeave(it.kind) ? (it.title && it.title !== PKIND[it.kind] ? `${PKIND[it.kind]} · ${it.title}` : PKIND[it.kind]) : it.title;
+const meTasks = () => meItems().filter(it => it.kind === "work").map(it => ({ ...it, _me: true, assignee: me(), by: me() }));
+function saveMe(patch, what) {
+  const next = { items: meItems(), leave: meLeave(), ...patch, updatedAt: new Date().toISOString() };
+  return save(what || "저장", () => setDoc(doc(db, "worktime", "personal"), next));
+}
+const toggleMe = (id, on) => saveMe({ items: meItems().map(x => x.id === id ? { ...x, done: on, doneAt: on ? new Date().toISOString() : "" } : x) }, "업무를 바꾸");
+function weekdaysIn(s, e) { let d = D(s), n = 0; const end = D(e || s); if (!d || !end) return 0; for (let k = 0; d <= end && k < 400; k++) { if (d.getDay() !== 0 && d.getDay() !== 6) n++; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1); } return n; }
+function leaveStats() {
+  const L = meLeave(), year = +L.year || new Date().getFullYear();
+  const used = k => (+L[k + "Base"] || 0) + meItems().filter(it => it.kind === k && (it.start || "").startsWith(String(year))).reduce((a, it) => a + (+it.days || 0), 0);
+  const total = +L.annualTotal || 0, aUsed = used("annual");
+  return { year, set: !!(total || L.annualBase || L.sickBase), total, annualUsed: aUsed, annualLeft: total - aUsed, sickUsed: used("sick") };
+}
+const dayN = v => (Math.round(v * 100) / 100).toString();
+function personalDialog(it, preset) {
+  const isNew = !it; it = it || { kind: (preset && preset.kind) || "work", when: "day", start: (preset && preset.date) || iso(today()) };
+  const s0 = sched(it);
+  const kind = h("select", null, Object.entries(PKIND).map(([v, l]) => h("option", { value: v }, l))); kind.value = it.kind || "work";
+  const title = h("input", { type: "text", value: it.title || "", maxlength: 100 });
+  const when = h("select", null, [["none", "정하지 않음"], ["day", "하루 (종일)"], ["time", "시간 지정"], ["range", "기간"]].map(([v, l]) => h("option", { value: v }, l))); when.value = s0.kind;
+  const start = h("input", { type: "date", value: s0.start }), end = h("input", { type: "date", value: s0.kind === "range" ? s0.end : "" });
+  const time = h("input", { type: "time", value: s0.time }), etime = h("input", { type: "time", value: s0.endTime });
+  const daysIn = h("input", { type: "number", min: 0, step: "any", value: it.days != null ? it.days : "" });
+  const place = h("input", { type: "text", value: it.place || "", maxlength: 100 });
+  const memo = h("textarea", { maxlength: 600 }); memo.value = it.memo || "";
+  const fTitle = field("제목", "m-title", title), fStart = field("날짜", "m-start", start), fEnd = field("끝나는 날", "m-end", end), fTime = field("시작 시간", "m-time", time), fEtime = field("끝나는 시간 (선택)", "m-etime", etime);
+  const fDays = field("사용 일수 (반차는 0.5)", "m-days", daysIn), fPlace = field("장소 (선택)", "m-place", place);
+  let daysTouched = it.days != null;
+  daysIn.addEventListener("input", () => { daysTouched = true; });
+  const autoDays = () => { if (!daysTouched && isLeave(kind.value) && start.value) daysIn.value = weekdaysIn(start.value, when.value === "range" && end.value ? end.value : start.value) || ""; };
+  const show = () => { const k = kind.value, w = when.value, lv = isLeave(k);
+    [...when.options].forEach(o => { if (o.value === "none") o.disabled = k !== "work" && k !== "etc"; });
+    if (when.value === "none" && k !== "work" && k !== "etc") when.value = "day";
+    fStart.hidden = when.value === "none"; fEnd.hidden = when.value !== "range"; fTime.hidden = fEtime.hidden = when.value !== "time";
+    fStart.querySelector("label").textContent = when.value === "range" ? "시작하는 날" : "날짜";
+    fDays.hidden = !lv; fPlace.hidden = k !== "event" && k !== "etc";
+    fTitle.querySelector("label").textContent = lv ? "메모할 이름 (선택 · 예: 오후 반차)" : k === "work" ? "업무" : "제목";
+    title.placeholder = k === "work" ? "예: 연간 사업계획서 제출" : k === "event" ? "예: 교육과정 포럼" : ""; autoDays(); };
+  [kind, when, start, end].forEach(el => el.addEventListener("change", show)); show();
+  const err = h("span", { class: "err" });
+  const form = h("form", { class: "dlg", onsubmit: async ev => {
+    ev.preventDefault(); err.textContent = "";
+    const k = kind.value, w = when.value, lv = isLeave(k);
+    if (!lv && !title.value.trim()) { err.textContent = "제목을 입력해 주세요."; return; }
+    if (w !== "none" && !start.value) { err.textContent = "날짜를 입력해 주세요."; return; }
+    if (w === "range" && (!end.value || end.value < start.value)) { err.textContent = "끝나는 날을 시작하는 날과 같거나 그 뒤로 정해 주세요."; return; }
+    if (w === "time" && !time.value) { err.textContent = "시작 시간을 입력해 주세요."; return; }
+    if (w === "time" && etime.value && etime.value < time.value) { err.textContent = "끝나는 시간이 시작 시간보다 빠릅니다."; return; }
+    const dn = lv ? parseFloat(daysIn.value) : 0;
+    if (lv && !(dn >= 0)) { err.textContent = "사용 일수를 숫자로 입력해 주세요."; return; }
+    const sd = w === "none" ? "" : start.value;
+    const item = { id: it.id || "m" + newId(), kind: k, title: title.value.trim() || (lv ? PKIND[k] : ""), when: w, start: sd, end: w === "range" ? end.value : sd, time: w === "time" ? time.value : "", endTime: w === "time" ? etime.value : "",
+      place: place.value.trim(), memo: memo.value.trim(), days: lv ? dn : 0, done: !!it.done, createdAt: it.createdAt || new Date().toISOString() };
+    busy(form, true);
+    if (await saveMe({ items: meItems().filter(x => x.id !== item.id).concat(item) }, "일정을 저장")) closeDlg(); else busy(form, false);
+  } },
+    h("h2", null, isNew ? "내 일정 추가" : "내 일정 수정"),
+    h("div", { class: "small muted" }, "과제에 속하지 않는 회사 업무, 행사, 연가·병가입니다. 관리자에게만 보입니다."),
+    h("div", { class: "row", style: "align-items:flex-start" }, field("종류", "m-kind", kind), field("일정", "m-when", when)),
+    fTitle, h("div", { class: "row", style: "align-items:flex-start" }, fStart, fEnd, fTime, fEtime), fDays, fPlace, field("메모 (선택)", "m-memo", memo),
+    dlgFoot(err, "저장", isNew ? null : async () => { if (await ask("이 일정을 지울까요?", "지우기") && await saveMe({ items: meItems().filter(x => x.id !== it.id) }, "일정을 지우")) closeDlg(); }));
+  openDlg(form);
+}
+function leaveSettings() {
+  const L = meLeave(), num = (v, id) => h("input", { type: "number", min: 0, step: "any", value: v != null ? v : "" });
+  const year = h("input", { type: "number", min: 2020, max: 2100, step: 1, value: L.year || new Date().getFullYear() });
+  const total = num(L.annualTotal), aBase = num(L.annualBase), sBase = num(L.sickBase), err = h("span", { class: "err" });
+  const form = h("form", { class: "dlg", onsubmit: async ev => { ev.preventDefault();
+    const v = el => parseFloat(el.value) || 0;
+    busy(form, true);
+    if (await saveMe({ leave: { year: parseInt(year.value) || new Date().getFullYear(), annualTotal: v(total), annualBase: v(aBase), sickBase: v(sBase) } }, "휴가 설정을 저장")) closeDlg(); else busy(form, false);
+  } },
+    h("h2", null, "연가·병가 설정"),
+    h("div", { class: "help" }, "‘이미 쓴 일수’에는 이 사이트에 날짜를 넣지 않은 지금까지의 사용분을 적습니다. 그 뒤로 사이트에 넣는 연가·병가는 여기에 자동으로 더해집니다. 예: 연가 9일 중 2일이 남았다면 발생 9, 이미 쓴 일수 7."),
+    h("div", { class: "row", style: "align-items:flex-start" }, field("기준 연도", "lv-year", year), field("연가 발생 일수", "lv-total", total)),
+    h("div", { class: "row", style: "align-items:flex-start" }, field("연가 이미 쓴 일수", "lv-abase", aBase), field("병가 이미 쓴 일수", "lv-sbase", sBase)),
+    dlgFoot(err, "저장"));
+  openDlg(form, true);
+}
+function leaveCard() {
+  const st = leaveStats(), tdy = iso(today());
+  const next = meItems().filter(it => isLeave(it.kind) && sched(it).end >= tdy).sort((a, b) => schedKey(a).localeCompare(schedKey(b))).slice(0, 3);
+  const big = (label, v, sub, color) => h("div", null, h("div", { class: "small muted" }, label), h("div", { class: "sval num", style: color ? `color:${color}` : null }, v), h("div", { class: "small muted num" }, sub));
+  return h("section", { class: "panel stack", style: "gap:10px" },
+    h("div", { class: "row spread" }, h("h2", null, `${st.year}년 연가·병가`), h("div", { class: "row", style: "gap:10px" },
+      h("button", { class: "linkbtn", type: "button", onclick: () => personalDialog(null, { kind: "annual" }) }, "휴가 추가"), h("button", { class: "linkbtn", type: "button", onclick: leaveSettings }, "설정"))),
+    !st.set ? h("div", { class: "muted small" }, "‘설정’에서 연가 발생 일수와 지금까지 쓴 일수를 넣어 주세요.")
+      : h("div", { class: "row", style: "gap:28px;align-items:flex-start" },
+          big("연가 잔여", `${dayN(st.annualLeft)}일`, `${dayN(st.total)}일 중 ${dayN(st.annualUsed)}일 사용`, st.annualLeft < 0 ? "var(--crit)" : st.annualLeft <= 2 ? "var(--warn)" : null),
+          big("병가 사용", `${dayN(st.sickUsed)}일`, "올해 누적")),
+    next.length ? h("div", { class: "stack", style: "gap:2px;border-top:1px solid var(--line);padding-top:8px" }, next.map(it => h("button", { class: "nline", type: "button", style: "border-top:0;padding:4px 0", onclick: () => personalDialog(it) },
+        h("span", { class: "kind", style: `color:${PCOLOR[it.kind]}` }, PKIND[it.kind]), h("span", { class: "ntitle num" }, schedText(it).text), h("span", { class: "muted small num" }, `${dayN(+it.days || 0)}일`)))) : null);
+}
+
 /* ---------- 첫 화면 (대시보드) ---------- */
 const shortD = s => { const d = D(s); return d ? `${d.getMonth() + 1}.${String(d.getDate()).padStart(2, "0")}` : ""; };
 function schedShort(t) { const s = sched(t); return !s.start ? "일정 없음" : s.end !== s.start ? `${shortD(s.start)}~${shortD(s.end)}` : shortD(s.start) + (s.time ? " " + s.time : ""); }
@@ -1191,6 +1301,7 @@ function taskState(t) {
 function openTasks(pick) {
   const all = [];
   for (const p of S.projects) (S.todos[p.id] || []).forEach(t => { if (!t.done && pick(t)) all.push({ p, t }); });
+  if (S.isAdmin) meTasks().forEach(t => { if (!t.done && pick(t)) all.push({ p: MEP, t }); });
   return all.sort((a, b) => (schedText(b.t).late - schedText(a.t).late) || schedKey(a.t).localeCompare(schedKey(b.t)));
 }
 function taskCard(title, pick, key, empty) {
@@ -1202,7 +1313,7 @@ function taskCard(title, pick, key, empty) {
         h("input", { type: "checkbox", disabled: !can, "aria-label": `${t.title} 완료`, onchange: ev => toggleTodo(p, t, ev.target.checked) }),
         h("span", { class: "st " + cls }, label),
         S.isAdmin ? h("button", { class: "tt", type: "button", title: "눌러서 수정", onclick: () => todoDialog(p, t) }, t.title) : h("span", { class: "tt" }, t.title),
-        h("a", { class: "tp", href: "#p-" + p.id + "-todo" }, p.title + (key === "req" ? " · " + whoName(p, t.assignee) : "")),
+        h("a", { class: "tp", href: p.id === "_me" ? "#calendar" : "#p-" + p.id + "-todo" }, p.id === "_me" ? PKIND.work : p.title + (key === "req" ? " · " + whoName(p, t.assignee) : "")),
         h("span", { class: "td num" + (cls === "st-late" ? " late" : "") }, schedShort(t))); }))
       : h("div", { class: "muted small", style: "padding:8px 0" }, empty),
     all.length > 7 ? h("div", null, h("button", { class: "btn quiet small", type: "button", onclick: () => { S.more[key] = !more; render(); } }, more ? "접기" : `전체 ${all.length}건 보기`)) : null);
@@ -1214,6 +1325,7 @@ function dayItems(key) {   // 그날의 회의·마감·할 일
     (p.milestones || []).forEach(x => { if (x.date === key && !x.done) out.push({ kind: "마감", time: "", title: x.label, p }); });
     (S.todos[p.id] || []).forEach(x => { if (!x.done && (S.isAdmin || isMine(x)) && schedDays(x).includes(key)) out.push({ kind: "할 일", time: sched(x).time, title: x.title, p }); });
   }
+  if (S.isAdmin) meItems().forEach(it => { if (!(it.kind === "work" && it.done) && schedDays(it).includes(key)) out.push({ kind: PKIND[it.kind], time: sched(it).time, title: meTitle(it), p: MEP }); });
   return out.sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
 }
 function upcomingCard() {
@@ -1222,11 +1334,13 @@ function upcomingCard() {
     (S.events[p.id] || []).forEach(e => { if (e.date >= tdy) items.push({ date: e.date, time: e.time || "", title: e.title, p, e, kind: "회의" }); });
     (p.milestones || []).forEach(x => { if (!x.done && x.date >= tdy) items.push({ date: x.date, time: "", title: x.label, p, kind: "마감" }); });
   }
+  if (S.isAdmin) meItems().forEach(it => { const sc = sched(it); if (it.kind === "work" || !sc.start || sc.end < tdy) return;
+    items.push({ date: sc.start < tdy ? tdy : sc.start, time: sc.time, title: meTitle(it), p: MEP, me: it, kind: PKIND[it.kind] + (sc.end !== sc.start ? ` · ${shortD(sc.end)}까지` : "") }); });
   items.sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const when = i => { const d = D(i.date), n = days(t, d); return (n === 0 ? "오늘" : n < 7 ? WEEK[d.getDay()] : shortD(i.date)) + " " + (i.time || "종일"); };
   return h("section", { class: "panel stack", style: "gap:4px" },
     h("div", { class: "row spread", style: "padding-bottom:6px" }, h("h2", null, "일정 요약"), h("a", { class: "small", href: "#calendar" }, S.isAdmin ? "전체 캘린더" : "내 캘린더")),
-    items.length ? items.slice(0, 5).map(i => h(i.e ? "button" : "div", { class: "urow", type: i.e ? "button" : null, style: `${projVars(i.p)}`, onclick: i.e ? () => eventDialog(i.p, i.e) : null },
+    items.length ? items.slice(0, 6).map(i => h(i.e || i.me ? "button" : "div", { class: "urow", type: i.e || i.me ? "button" : null, style: i.me ? meVars(i.me) : `${projVars(i.p)}`, onclick: i.e ? () => eventDialog(i.p, i.e) : i.me ? () => personalDialog(i.me) : null },
         h("span", { class: "uwhen num" }, when(i)), h("span", { style: "min-width:0" }, h("b", null, i.title), h("span", { class: "uproj" }, `${i.p.title} · ${i.kind}`))))
       : h("div", { class: "muted small", style: "padding:8px 0" }, "다가오는 회의나 마감이 없습니다."));
 }
@@ -1242,6 +1356,7 @@ function miniCal() {
     (p.milestones || []).forEach(x => { if (x.date) mark(x.date, p); });
     (S.todos[p.id] || []).forEach(x => { if (S.isAdmin || isMine(x)) schedDays(x).forEach(d => mark(d, p)); });
   }
+  if (S.isAdmin) meItems().forEach(it => { if (it.kind === "work" && it.done) return; schedDays(it).forEach(d => { if (d.startsWith(mk)) (dots[d] ||= new Set()).add(PCOLOR[it.kind] || PCOLOR.etc); }); });
   const cells = [];
   for (let i = 0; i < first.getDay(); i++) cells.push(h("span"));
   for (let d = 1; d <= dim; d++) { const key = `${mk}-${String(d).padStart(2, "0")}`, ds = [...(dots[key] || [])].slice(0, 3);
@@ -1254,7 +1369,8 @@ function miniCal() {
         h("button", { class: "btn", style: "padding:3px 9px", type: "button", "aria-label": "이전 달", onclick: () => move(-1) }, "‹"),
         h("button", { class: "btn", style: "padding:3px 9px", type: "button", "aria-label": "다음 달", onclick: () => move(1) }, "›"))),
     h("div", { class: "mcal" }, WEEK.map((w, i) => h("span", { class: "mdow" + (i === 0 ? " sun" : "") }, w)), cells),
-    S.projects.length ? h("div", { class: "legend" }, S.projects.map(p => h("span", null, h("i", { class: "lg-dot", style: `background:${projColor(p)}` }), p.title))) : null,
+    S.projects.length || meItems().length ? h("div", { class: "legend" }, S.projects.map(p => h("span", null, h("i", { class: "lg-dot", style: `background:${projColor(p)}` }), p.title)),
+      S.isAdmin ? [...new Set(meItems().map(it => it.kind))].map(k => h("span", null, h("i", { class: "lg-dot", style: `background:${PCOLOR[k] || PCOLOR.etc}` }), PKIND[k] || "기타")) : null) : null,
     sel ? h("div", { class: "stack", style: "gap:2px;border-top:1px solid var(--line);padding-top:8px" },
       h("div", { class: "small muted", style: "font-weight:600" }, fmtDay(sel)),
       list.length ? list.map(i => h("div", { class: "small", style: "display:flex;gap:6px" }, h("span", { class: "muted num", style: "flex:0 0 auto" }, `${i.kind}${i.time ? " " + i.time : ""}`), h("span", { style: "min-width:0;overflow-wrap:anywhere" }, `${i.title} `, h("span", { class: "muted" }, `· ${i.p.title}`))))
@@ -1374,17 +1490,18 @@ function viewHome() {
   const head = h("div", { class: "row spread", style: "align-items:flex-start" },
     h("div", { style: "min-width:0" }, h("div", { class: "muted num" }, dateLine), h("h1", null, `안녕하세요, ${S.user.name || me()}님`), hello),
     admin ? h("div", { class: "row", style: "gap:8px" },
+      h("button", { class: "btn", type: "button", onclick: () => personalDialog(null) }, "내 일정 추가"),
       h("button", { class: "btn", type: "button", onclick: manageTypes }, "과제 유형 관리"),
       h("button", { class: "btn primary", type: "button", onclick: () => editProject(null) }, "과제 추가")) : null);
   if (!S.loaded.projects) return h("div", { class: "stack" }, head, h("div", { class: "panel muted" }, "과제를 불러오는 중입니다…"), linksSection());
   const mine = openTasks(t => admin ? t.assignee === me() : isMine(t));
-  const todayN = rooms.reduce((a, p) => a + (S.events[p.id] || []).filter(e => e.date === tdy).length, 0) + mine.filter(x => schedDays(x.t).includes(tdy)).length;
+  const todayN = rooms.reduce((a, p) => a + (S.events[p.id] || []).filter(e => e.date === tdy).length, 0) + mine.filter(x => schedDays(x.t).includes(tdy)).length + (admin ? meItems().filter(it => it.kind !== "work" && schedDays(it).includes(tdy)).length : 0);
   const lateN = openTasks(t => admin || isMine(t)).filter(x => schedText(x.t).late).length;
   const week = iso(new Date(n.getFullYear(), n.getMonth(), n.getDate() + 7));
   const msN = rooms.reduce((a, p) => a + (p.milestones || []).filter(x => !x.done && x.date >= tdy && x.date <= week).length, 0);
   const stat = (label, v, warn) => h("span", { class: "sitem" }, h("span", { class: "muted" }, label), h("b", { class: "num" + (warn && v ? " late" : "") }, v));
   hello.replaceChildren(greetLine({ late: lateN, today: todayN, projects: rooms.length }), weatherLine());
-  const strip = h("div", { class: "strip" }, stat("오늘 일정", todayN), stat("지연된 할 일", lateN, true), stat("7일 안 마감", msN), stat(admin ? "과제" : "참여 과제", rooms.length));
+  const strip = h("div", { class: "strip" }, stat("오늘 일정", todayN), stat("지연된 할 일", lateN, true), stat("7일 안 마감", msN), stat(admin ? "과제" : "참여 과제", rooms.length), admin && leaveStats().set ? stat("연가 잔여", dayN(leaveStats().annualLeft) + "일") : null);
   const plist = h("section", { class: "panel stack", style: "gap:4px" }, h("div", { style: "padding-bottom:6px" }, h("h2", null, admin ? "과제" : "내 과제")),
     rooms.length ? h("div", { class: "plist" }, rooms.map(r => { const c = (S.todos[r.id] || []).filter(t => !t.done && (admin || isMine(t))).length;
         return h("a", { class: "pitem", href: "#p-" + r.id }, projTile(r), h("span", { class: "ptitle" }, r.title), h("span", { class: "lock" }, c ? `할 일 ${c}건` : "할 일 없음")); }))
@@ -1395,8 +1512,8 @@ function viewHome() {
         taskCard(admin ? "내가 담당 중인 업무" : "내 할 일", t => admin ? t.assignee === me() : isMine(t), "mine", admin ? "담당 중인 업무가 없습니다. 과제의 ‘할 일’ 탭에서 담당을 ‘나 (관리자)’로 정하면 여기에 모입니다." : "지금 나에게 배정된 할 일이 없습니다."),
         admin ? taskCard("내가 요청한 업무", t => t.assignee !== me() && (!t.by || t.by === me()), "req", "요청한 업무가 없습니다.") : plist),
       h("div", { class: "stack" }, upcomingCard(), miniCal(), noticesCard())),
-    admin ? h("div", { class: "dash3" }, plist, workCard(), h("div", { class: "rcol" }, timeline())) : null,
-    admin && rooms.length ? agenda() : null,
+    admin ? h("div", { class: "dash3" }, plist, workCard(), leaveCard(), h("div", { class: "rcol" }, timeline())) : null,
+    admin && (rooms.length || meItems().length) ? agenda() : null,
     linksSection());
 }
 
@@ -1543,12 +1660,15 @@ function allCalendar(embed) {
     (S.todos[p.id] || []).forEach(x => { if (!(admin || isMine(x))) return; const sc = sched(x), ds = schedDays(x);
       ds.forEach((d, n) => items.push({ kind: "td", date: d, time: sc.time, title: x.title, p, done: x.done, who: whoName(p, x.assignee), span: ds.length > 1 ? schedText(x).text : "", cont: n > 0 })); });
   }
+  if (admin) meItems().forEach(it => { if (it.kind === "work" && it.done) return; const sc = sched(it), ds = schedDays(it);
+    ds.forEach(d => items.push({ kind: "me", date: d, time: sc.time, title: meTitle(it), p: MEP, me: it, span: ds.length > 1 ? schedText(it).text : "" })); });
   if (connected) G.items.filter(g => !sent.has(g.id)).forEach(g => items.push({ kind: "g", date: g.date, time: g.time, title: g.title, g }));
   const inMonth = items.filter(i => (i.date || "").startsWith(monthKey)).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const seenTd = new Set();
-  const listItems = inMonth.filter(i => { if (i.kind !== "td" || !i.span) return true; const k = i.p.id + "|" + i.title + "|" + i.span; if (seenTd.has(k)) return false; seenTd.add(k); return true; });
+  const listItems = inMonth.filter(i => { if ((i.kind !== "td" && i.kind !== "me") || !i.span) return true; const k = i.p.id + "|" + i.title + "|" + i.span; if (seenTd.has(k)) return false; seenTd.add(k); return true; });
   const chip = i => i.kind === "ev" ? h("button", { class: "cev pj", type: "button", style: `${projVars(i.p)}`, title: [i.p.title, timeOf(i.e), i.title, i.e.place].filter(Boolean).join(" · "), onclick: () => eventDialog(i.p, i.e) }, (i.time ? i.time + " " : "") + i.title)
     : i.kind === "ms" ? h("span", { class: "cev ms2", title: `${i.p.title} · ${i.title}` }, "◆ " + i.title)
+    : i.kind === "me" ? h("button", { class: "cev pj", type: "button", style: meVars(i.me), title: [PKIND[i.me.kind], i.title, i.me.place].filter(Boolean).join(" · "), onclick: () => personalDialog(i.me) }, (i.time ? i.time + " " : "") + (i.me.kind === "work" ? "☐ " : "") + i.title)
     : i.kind === "td" ? h("span", { class: "cev td2" + (i.done ? " done" : ""), title: `${i.p.title} · ${i.title}${i.span ? " · " + i.span : ""} · 담당 ${i.who}` }, (i.done ? "☑ " : "☐ ") + (i.time ? i.time + " " : "") + i.title)
     : h("a", { class: "cev gc", href: i.g.link || "https://calendar.google.com", target: "_blank", rel: "noopener", title: [i.time, i.title, i.g.place].filter(Boolean).join(" · ") }, (i.time ? i.time + " " : "") + i.title);
   const cells = [];
@@ -1558,7 +1678,7 @@ function allCalendar(embed) {
     cells.push(h("div", { class: "cell" + (key === tdy ? " today" : "") }, h("span", { class: "dnum num" + (dow === 0 ? " sun" : "") }, day), inMonth.filter(i => i.date === key).map(chip)));
   }
   while (cells.length % 7) cells.push(h("div", { class: "cell off" }));
-  const kindName = { ev: "회의", ms: "마감", td: "할 일", g: "Google" }, kindCls = { ev: "k-ev", ms: "k-ms", td: "k-td", g: "k-g" };
+  const kindName = { ev: "회의", ms: "마감", td: "할 일", g: "Google", me: "내 일정" }, kindCls = { ev: "k-ev", ms: "k-ms", td: "k-td", g: "k-g", me: "k-g" };
   const gPanel = !admin ? null : h("section", { class: "panel stack", style: "gap:10px" },
     h("div", { class: "row spread" },
       h("div", null, h("h2", null, "Google 캘린더"),
@@ -1578,15 +1698,18 @@ function allCalendar(embed) {
         h("button", { class: "btn quiet", type: "button", onclick: () => { S.acal = { y: t.getFullYear(), m: t.getMonth() }; render(); } }, "오늘")),
       h("div", { class: "calwrap" }, h("div", { class: "cal" + (embed ? " compact" : "") }, WEEK.map((w, i) => h("div", { class: "dow" + (i === 0 ? " sun" : "") }, w)), cells)),
       h("div", { class: "legend" }, S.projects.map(p => h("span", null, h("i", { class: "lg-bar", style: `${projVars(p)}` }), p.title)),
+        admin ? [...new Set(meItems().map(it => it.kind))].map(k => h("span", null, h("i", { class: "lg-bar", style: `--c:${PCOLOR[k] || PCOLOR.etc}` }), PKIND[k] || "기타")) : null,
         h("span", null, "◆ 마감·주요 일정"), h("span", null, "☐ 할 일"), connected ? h("span", null, h("i", { class: "lg-bar gcbar" }), "Google 캘린더") : null));
   if (embed) return gridSec;
   return h("div", { class: "stack" },
-    h("div", null, h("h1", null, admin ? "전체 캘린더" : "내 캘린더"), h("div", { class: "muted" }, admin ? "모든 과제의 회의, 마감, 할 일을 한 달력에 모았습니다." : "내가 참여하는 과제의 회의, 마감, 내 할 일입니다.")),
+    h("div", { class: "row spread" },
+      h("div", null, h("h1", null, admin ? "전체 캘린더" : "내 캘린더"), h("div", { class: "muted" }, admin ? "모든 과제의 회의·마감·할 일과 내 일정(회사 업무, 행사, 연가·병가)을 한 달력에 모았습니다." : "내가 참여하는 과제의 회의, 마감, 내 할 일입니다.")),
+      admin ? h("button", { class: "btn primary", type: "button", onclick: () => personalDialog(null, { date: `${monthKey}-01` === iso(t).slice(0, 8) + "01" ? iso(t) : `${monthKey}-01` }) }, "내 일정 추가") : null),
     gPanel,
     gridSec,
     h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `${m + 1}월 일정 ${listItems.length}건`),
       listItems.length ? h("ul", { class: "list" }, listItems.map(i => h("li", { class: "todo" },
-        h("span", { class: "when wide num" }, i.span || fmtDay(i.date)), h("span", { class: "kind " + kindCls[i.kind] }, kindName[i.kind]),
+        h("span", { class: "when wide num" }, i.span || fmtDay(i.date)), h("span", { class: "kind " + kindCls[i.kind], style: i.me ? `color:${PCOLOR[i.me.kind]}` : null }, i.me ? PKIND[i.me.kind] : kindName[i.kind]),
         h("span", { class: "tmain" }, h("span", { class: "ttitle" }, i.title),
           h("span", { class: "small muted", style: "display:block" }, [i.p ? i.p.title : "내 Google 캘린더", i.e ? timeOf(i.e) : i.time, i.e ? i.e.place : i.g ? i.g.place : null, i.who ? "담당 " + i.who : null].filter(Boolean).join(" · "))),
         i.kind === "ev" ? (i.e.gcalId && admin ? h("span", { class: "small muted" }, "Google에 보냄") : gAddLink(i.p, i.e)) : i.kind === "g" && i.g.link ? h("a", { class: "small", href: i.g.link, target: "_blank", rel: "noopener" }, "Google에서 열기") : null)))
@@ -1790,7 +1913,7 @@ function boot() {
   let linksStop = watchLinks();
   onAuthStateChanged(auth, u => {
     stopAll(); linksStop(); S.workMounted = false;
-    S.projects = []; S.todos = {}; S.events = {}; S.types = null; S.loaded.projects = false; S.denied = false; S.redirected = false;
+    S.projects = []; S.todos = {}; S.events = {}; S.types = null; S.me = null; S.loaded.projects = false; S.denied = false; S.redirected = false;
     S.user = u && u.email ? { email: normEmail(u.email), name: u.displayName || "" } : null;
     S.isAdmin = !!S.user && (ADMIN_EMAILS || []).map(normEmail).includes(S.user.email);
     S.authReady = true;
