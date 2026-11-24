@@ -1,6 +1,6 @@
 {
-  "name": "연구과제 관리",
-  "short_name": "연구과제 관리",
+  "name": "연구 관리",
+  "short_name": "연구 관리",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

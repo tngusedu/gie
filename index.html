@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>연구과제 관리</title>
+<title>연구 관리</title>
 <script>try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
@@ -506,7 +506,7 @@ function status(p) {
 }
 const typesList = () => (Array.isArray(S.types) && S.types.length ? S.types : TYPES);
 function typeColor(type) {
-  const base = typesList(), extra = [...new Set(S.projects.map(p => p.type || "기타"))].filter(x => !base.includes(x)).sort();
+  const base = typesList(), extra = [...new Set(S.projects.filter(p => spaceOf(p) === "project").map(p => p.type || "기타"))].filter(x => !base.includes(x)).sort();
   return `var(--t${(Math.max(0, [...base, ...extra].indexOf(type || "기타")) % 5) + 1})`;
 }
 function tileColor(label) { let n = 0; for (const ch of String(label)) n = (n * 31 + ch.codePointAt(0)) % 997; return `var(--t${n % 5 + 1})`; }
@@ -742,17 +742,27 @@ function watchLinks() {
 }
 
 /* ---------- 과제 편집 (관리자) ---------- */
-function editProject(p) {
+// 공간 구분: 과제(연구과제) / 업무 / 개인연구. 예전에 만든 것은 모두 과제로 본다.
+const SPACES = { project: "과제", work: "업무", personal: "개인연구" };
+const spaceOf = p => SPACES[p && p.space] ? p.space : "project";
+function editProject(p, presetSpace) {
   const isNew = !p;
   p = p || { type: typesList()[0], milestones: [], members: [], links: [
     { group: "협업", label: "Dropbox 폴더", url: "" }, { group: "협업", label: "Google Drive 폴더", url: "" },
     { group: "기관", label: "경기도교육청", url: "https://www.goe.go.kr" }, { group: "기관", label: "경기도교육연구원", url: "https://www.gie.re.kr" }] };
   const y = S.year;
   const title = h("input", { type: "text", value: p.title || "", required: true, maxlength: 120 });
+  const space = h("select", null, Object.entries(SPACES).map(([v, l]) => h("option", { value: v }, l))); space.value = isNew && SPACES[presetSpace] ? presetSpace : spaceOf(p);
   const typeOpts = typesList().includes(p.type) || !p.type ? typesList() : [p.type, ...typesList()];
   const type = h("select", null, typeOpts.map(o => h("option", { value: o }, o))); type.value = p.type || typeOpts[0];
+  const h2 = h("h2", null, ""), fTitle = field("과제명", "f-title", title), fType = field("과제 유형", "f-type", type);
   const start = h("input", { type: "date", value: p.start || (isNew ? `${y}-01-01` : "") });
   const end = h("input", { type: "date", value: p.end || (isNew ? `${y}-12-31` : "") });
+  const fStart = field("연구 시작일", "f-start", start), fEnd = field("연구 종료일", "f-end", end);
+  const spaceShow = () => { const sp = space.value, nm = SPACES[sp]; h2.textContent = `${nm} ${isNew ? "추가" : "수정"}`;
+    fTitle.querySelector("label").textContent = sp === "project" ? "과제명" : sp === "work" ? "업무 이름" : "연구 주제";
+    fType.hidden = sp !== "project"; fStart.querySelector("label").textContent = sp === "work" ? "시작일 (선택)" : "연구 시작일"; fEnd.querySelector("label").textContent = sp === "work" ? "종료일 (선택)" : "연구 종료일"; };
+  space.addEventListener("change", spaceShow); spaceShow();
   const notice = h("textarea", { maxlength: 1500 }); notice.value = p.notice || "";
   const icon = h("input", { type: "text", value: p.icon || "", maxlength: 300, placeholder: "예: 📘, 공, A1 또는 icons/co.png" });
   let colorVal = typeof p.color === "string" ? normHex(p.color) : (LEGACY[p.color] || "");   // "" = 자동
@@ -819,7 +829,7 @@ function editProject(p) {
     if (rawLinks.some(l => !safeUrl(l.url))) { err.textContent = "도구 주소는 https:// 로 시작해야 합니다."; return; }
     const id = p.id || "p" + newId();
     const data = {
-      title: title.value.trim(), type: type.value, start: start.value, end: end.value, notice: notice.value.trim(),
+      title: title.value.trim(), space: space.value, type: space.value === "project" ? type.value : "", start: start.value, end: end.value, notice: notice.value.trim(),
       links: rawLinks.map(l => ({ group: l.group || "기타", label: l.label, url: safeUrl(l.url), icon: iconSrc(l.icon) })),
       members, memberEmails: [...new Set(members.map(m => m.email).filter(Boolean))],   // 이 목록에 있는 메일만 과제를 열 수 있다 (보안 규칙이 확인)
       milestones: rows(sBox, ["date", "label", "done"]).filter(m => m.label).sort((a, b) => (a.date || "9").localeCompare(b.date || "9")),
@@ -829,9 +839,9 @@ function editProject(p) {
     busy(form, true);
     if (await save("과제를 저장", () => setDoc(doc(db, "projects", id), data))) { closeDlg(); toast("과제를 저장했습니다."); } else busy(form, false);
   } },
-    h("h2", null, isNew ? "과제 추가" : "과제 수정"),
-    field("과제명", "f-title", title),
-    h("div", { class: "row", style: "align-items:flex-start" }, field("과제 유형", "f-type", type), field("연구 시작일", "f-start", start), field("연구 종료일", "f-end", end)),
+    h2, field("구분", "f-space", space),
+    fTitle,
+    h("div", { class: "row", style: "align-items:flex-start" }, fType, fStart, fEnd),
     h("div", { class: "row", style: "align-items:flex-end" }, field("과제 아이콘 (선택)", "f-icon", icon), h("div", { style: "padding-bottom:4px" }, preview)),
     h("div", { class: "stack", style: "gap:6px" }, h("label", { class: "flabel", for: "f-hex" }, "과제 색"),
       h("div", { class: "row", style: "gap:8px" }, cPick, cHex, h("span", { class: "small muted" }, "색상표에서 고르거나 헥사코드(#1f8a70)를 적습니다")), swBox),
@@ -864,15 +874,15 @@ function editProject(p) {
 function orderProjects() {
   const box = h("div", { class: "stack", style: "gap:6px" });
   S.projects.forEach(p => { const row = h("div", { class: "subrow", style: "flex-wrap:nowrap", "data-id": p.id }, projTile(p),
-      h("span", { style: "flex:1;min-width:0;font-weight:500;overflow-wrap:anywhere" }, p.title)); box.append(grip(row, box, p.title)); });
+      h("span", { style: "flex:1;min-width:0;font-weight:500;overflow-wrap:anywhere" }, p.title), h("span", { class: "small muted", style: "flex:0 0 auto" }, SPACES[spaceOf(p)])); box.append(grip(row, box, p.title)); });
   const err = h("span", { class: "err" });
   const form = h("form", { class: "dlg", onsubmit: async ev => { ev.preventDefault(); busy(form, true);
     const ids = [...box.children].map(r => r.getAttribute("data-id"));
     const ok = await save("과제 순서를 저장", async () => { const b = writeBatch(db); ids.forEach((id, n) => b.update(doc(db, "projects", id), { order: n })); await b.commit(); });
     if (ok) closeDlg(); else busy(form, false);
   } },
-    h("h2", null, "과제 순서"),
-    h("div", { class: "help" }, "줄 앞의 ⠿를 끌어서 옮긴 뒤 저장하면 왼쪽 메뉴, 연구기간 표, 달력 범례가 이 순서로 나옵니다. 새로 추가한 과제는 맨 아래에 붙습니다. 이 순서는 연구진 화면에도 똑같이 적용됩니다."),
+    h("h2", null, "과제·업무·개인연구 순서"),
+    h("div", { class: "help" }, "줄 앞의 ⠿를 끌어서 옮긴 뒤 저장하면 왼쪽 메뉴, 연구기간 표, 달력 범례가 이 순서로 나옵니다. 왼쪽 메뉴에서는 과제·업무·개인연구가 따로 묶여, 각 묶음 안에서 이 순서대로 나옵니다. 새로 추가한 것은 맨 아래에 붙습니다. 이 순서는 연구진 화면에도 똑같이 적용됩니다."),
     box, dlgFoot(err, "저장"));
   openDlg(form, true);
 }
@@ -1313,7 +1323,7 @@ function monthPos(d, year, endOfDay) {
 }
 function timeline() {   // 모든 과제를 하나의 달력 축 위에 색이 다른 막대로 겹쳐 보여 준다
   const y = S.year, t = today();
-  const all = S.projects;   // 관리자가 정한 과제 순서를 그대로 따른다
+  const all = S.projects.filter(p => spaceOf(p) !== "work");   // 과제와 개인연구만 (업무는 연구기간 표에 넣지 않는다). 관리자가 정한 순서를 따른다
   const inYear = all.filter(p => { const s = D(p.start), e = D(p.end); return s && e && s.getFullYear() <= y && e.getFullYear() >= y; });
   const rest = all.filter(p => !inYear.includes(p));
   const cnt = k => inYear.filter(p => status(p).key === k).length;
@@ -1325,7 +1335,7 @@ function timeline() {   // 모든 과제를 하나의 달력 축 위에 색이 �
   return h("section", { class: "panel stack", style: "gap:12px" },
     h("div", { class: "row spread" },
       h("div", null, h("div", { class: "row", style: "gap:8px" }, h("h2", null, "연구기간"), h("span", { class: "only" }, "관리자에게만 보입니다")),
-        h("div", { class: "small muted num" }, `${y}년 과제 ${inYear.length}건 · 진행 중 ${cnt("live")} · 예정 ${cnt("soon")} · 종료 ${cnt("done")}`)),
+        h("div", { class: "small muted num" }, `${y}년 과제·개인연구 ${inYear.length}건 · 진행 중 ${cnt("live")} · 예정 ${cnt("soon")} · 종료 ${cnt("done")}`)),
       h("div", { class: "yearnav" },
         h("button", { class: "btn", type: "button", "aria-label": "이전 해", onclick: () => { S.year--; render(); } }, "←"),
         h("strong", { class: "num" }, y + "년"),
@@ -1337,7 +1347,7 @@ function timeline() {   // 모든 과제를 하나의 달력 축 위에 색이 �
     inYear.length ? h("div", { class: "tlegend" }, inYear.map(p => { const st = status(p);
         return h("a", { class: "tlrow", href: "#p-" + p.id }, h("i", { class: "tsw", style: `${projVars(p)}` }),
           h("span", { style: "min-width:0" }, h("span", { class: "tl-title" }, p.title),
-            h("span", { class: "small muted num", style: "display:block" }, `${p.type || "기타"} · ${st.label} · ${period(p)}`))); }),
+            h("span", { class: "small muted num", style: "display:block" }, `${spaceOf(p) === "project" ? p.type || "기타" : SPACES[spaceOf(p)]} · ${st.label} · ${period(p)}`))); }),
       h("div", { class: "legend", style: "padding-top:4px" }, h("span", null, h("i", { class: "lg-ms" }), "마감·주요 일정"), t.getFullYear() === y ? h("span", null, h("i", { class: "lg-today" }), "오늘") : null)) : null,
     rest.length ? h("div", { class: "small" }, h("span", { class: "muted" }, "다른 해 또는 기간 미정: "), rest.map((p, i) => [i ? ", " : "", h("a", { href: "#p-" + p.id }, `${p.title} (${period(p)})`)])) : null);
 }
@@ -1756,8 +1766,8 @@ function briefData() {
   const B = { admin, todayList, todayN: todayList.length,
     lateN: openTasks(x => admin || isMine(x)).filter(x => schedText(x.t).late).length,
     msN: rooms.reduce((a, p) => a + (p.milestones || []).filter(x => !x.done && x.date >= tdy && x.date <= week).length, 0),
-    activeN: rooms.filter(p => status(p).key === "live").length,                                             // 접속일 기준 수행 중인 과제
-    yearN: rooms.filter(p => (p.start || "").slice(0, 4) <= yr && (p.end || "").slice(0, 4) >= yr && p.start && p.end).length,   // 올해 수행 과제
+    activeN: rooms.filter(p => spaceOf(p) === "project" && status(p).key === "live").length,                                             // 접속일 기준 수행 중인 과제
+    yearN: rooms.filter(p => spaceOf(p) === "project" && (p.start || "").slice(0, 4) <= yr && (p.end || "").slice(0, 4) >= yr && p.start && p.end).length,   // 올해 수행 과제
     totalN: rooms.length, trips: [], leave: null, work: null };
   if (admin) {
     B.trips = meItems().filter(it => isOuting(it.kind) && sched(it).end >= tdy).sort((a, b) => schedKey(a).localeCompare(schedKey(b)))
@@ -1786,7 +1796,7 @@ function todayAlert() {   // 일정 알림에 넣을 것: 오늘의 출장·외�
 function viewHome() {
   const n = new Date(), dateLine = `${n.getMonth() + 1}월 ${n.getDate()}일 (${WEEK[n.getDay()]})`;
   if (!S.user) return h("div", { class: "stack" },
-    h("div", null, h("div", { class: "muted num" }, dateLine), h("h1", null, "연구과제 관리")),
+    h("div", null, h("div", { class: "muted num" }, dateLine), h("h1", null, "연구 관리")),
     h("section", { class: "panel stack", style: "gap:12px;max-width:560px" }, h("h2", null, "Google 계정으로 로그인"),
       h("p", { class: "muted", style: "margin:0" }, "관리자가 등록한 메일의 Google 계정으로 로그인하면 참여하는 과제로 바로 이동합니다. 비밀번호를 따로 입력하지 않습니다."),
       h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "Google 계정으로 로그인"))));
@@ -1854,7 +1864,7 @@ function viewRoom(id, tab) {
   const tabLink = (key, label) => h("a", { href: "#p-" + id + (key ? "-" + key : ""), "aria-current": tab === key ? "page" : null }, label);
   const head = h("div", { class: "stack", style: "gap:12px" },
     h("div", { class: "row spread", style: "align-items:flex-start" }, h("div", { class: "row", style: "gap:12px;flex-wrap:nowrap;min-width:0" }, projTile(p), h("h1", null, p.title)),
-      admin ? h("button", { class: "btn", type: "button", onclick: () => editProject(p) }, "과제 수정") : null),
+      admin ? h("button", { class: "btn", type: "button", onclick: () => editProject(p) }, `${SPACES[spaceOf(p)]} 수정`) : null),
     h("nav", { class: "tabs", "aria-label": "과제 화면" }, tabLink("", "개요"), tabLink("todo", `할 일${open.length ? " " + open.length : ""}`), tabLink("cal", "달력")));
   const overview = () => h("div", { class: "stack" },
     h("section", { class: "panel stack", style: "gap:6px" },
@@ -2323,18 +2333,24 @@ function manageLinks() {
 function render() {
   const hdr = $("#hdr"), app = $("#app");
   if (!S.configured) {
-    hdr.replaceChildren(h("a", { class: "brand", href: "#home" }, "연구과제 관리"));
+    hdr.replaceChildren(h("a", { class: "brand", href: "#home" }, "연구 관리"));
     app.replaceChildren(h("div", { class: "panel stack", style: "max-width:640px" }, h("h2", null, "Firebase 설정이 필요합니다"),
       h("p", { class: "muted", style: "margin:0" }, "firebase-config.js 파일에 Firebase 설정값과 관리자 메일을 넣은 뒤 GitHub에 다시 올려 주세요. 자세한 순서는 README.md에 있습니다.")));
     return;
   }
-  if (!S.authReady) { hdr.replaceChildren(h("a", { class: "brand", href: "#home" }, "연구과제 관리")); app.replaceChildren(h("div", { class: "panel muted" }, "불러오는 중입니다…")); return; }
+  if (!S.authReady) { hdr.replaceChildren(h("a", { class: "brand", href: "#home" }, "연구 관리")); app.replaceChildren(h("div", { class: "panel muted" }, "불러오는 중입니다…")); return; }
   const hash0 = location.hash.slice(1);
   const navA = (href, label, on) => h("a", { href: "#" + href, "aria-current": on ? "page" : null }, label);
   const isRoom = /^p-/.test(hash0);
-  hdr.replaceChildren(...[h("a", { class: "brand", href: "#home" }, "연구과제 관리"), ...(S.user ? [
+  hdr.replaceChildren(...[h("a", { class: "brand", href: "#home" }, "연구 관리"), ...(S.user ? [
       h("nav", { class: "nav", "aria-label": "화면" }, navA("home", "홈", !isRoom && hash0 !== "calendar" && hash0 !== "work"), navA("calendar", S.isAdmin ? "전체 캘린더" : "내 캘린더", hash0 === "calendar"), S.isAdmin ? navA("work", "근무시간", hash0 === "work") : null),
-      S.projects.length ? h("nav", { class: "nav", "aria-label": "과제" }, h("div", { class: "navlabel row spread", style: "flex-wrap:nowrap" }, h("span", null, "과제"), S.isAdmin && S.projects.length > 1 ? h("button", { class: "linkbtn", type: "button", onclick: orderProjects }, "순서") : null), S.projects.map(p => h("a", { class: "navp", href: "#p-" + p.id, "aria-current": hash0 === "p-" + p.id || hash0.startsWith("p-" + p.id + "-") ? "page" : null }, projTile(p), h("span", { style: "min-width:0" }, p.title, (n => n ? h("span", { class: "navcnt num", title: `남은 할 일 ${n}건` }, ` (${n})`) : null)((S.todos[p.id] || []).filter(t => !t.done && (S.isAdmin || isMine(t))).length))))) : null,
+      ...Object.entries(SPACES).map(([sp, nm], k) => { const list = S.projects.filter(p => spaceOf(p) === sp); if (!list.length && !S.isAdmin) return null;
+        if (!list.length && sp === "project" && !S.loaded.projects) return null;
+        return h("nav", { class: "nav", "aria-label": nm }, h("div", { class: "navlabel row spread", style: "flex-wrap:nowrap" }, h("span", null, nm),
+            h("span", { class: "row", style: "gap:10px;flex-wrap:nowrap" }, S.isAdmin && k === 0 && S.projects.length > 1 ? h("button", { class: "linkbtn", type: "button", onclick: orderProjects }, "순서") : null,
+              S.isAdmin ? h("button", { class: "linkbtn", type: "button", "aria-label": `${nm} 추가`, title: `${nm} 추가`, onclick: () => editProject(null, sp) }, "+") : null)),
+          list.map(p => h("a", { class: "navp", href: "#p-" + p.id, "aria-current": hash0 === "p-" + p.id || hash0.startsWith("p-" + p.id + "-") ? "page" : null }, projTile(p), h("span", { style: "min-width:0" }, p.title, (n => n ? h("span", { class: "navcnt num", title: `남은 할 일 ${n}건` }, ` (${n})`) : null)((S.todos[p.id] || []).filter(t => !t.done && (S.isAdmin || isMine(t))).length)))),
+          !list.length ? h("div", { class: "small muted", style: "padding:2px 10px 4px" }, "아직 없습니다") : null); }),
       isRoom ? null : railTools(),
       h("div", { class: "railfoot" }, h("span", { class: "who" }, `${S.user.name || S.user.email}${S.isAdmin ? " · 관리자" : ""}`),
         h("button", { class: "btn quiet", type: "button", "aria-pressed": String(NT.on), title: "사이트가 열려 있는 동안 일정 알림을 띄웁니다. 브라우저 알림 권한을 허용하면 Windows 알림으로도 뜹니다", onclick: ntToggle }, NT.on ? (ntDesktop() ? "일정 알림 켜짐 (Windows)" : "일정 알림 켜짐 (화면 안)") : "일정 알림 꺼짐"),
