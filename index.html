@@ -624,7 +624,8 @@ function watchProjects() {
   const col = collection(db, "projects");
   const q = S.isAdmin ? col : query(col, where("memberEmails", "array-contains", me()));
   subs.base.push(onSnapshot(q, snap => {
-    S.projects = snap.docs.map(d => ({ ...d.data(), id: d.id })); S.loaded.projects = true; S.denied = false;
+    // 과제 순서: 관리자가 정한 순서(order)가 있으면 그대로, 없으면 이름순
+    S.projects = snap.docs.map(d => ({ ...d.data(), id: d.id })).sort((a, b) => (a.order ?? 9999) - (b.order ?? 9999) || a.title.localeCompare(b.title)); S.loaded.projects = true; S.denied = false;
     const ids = new Set(S.projects.map(p => p.id));
     for (const id of Object.keys(subs.per)) if (!ids.has(id)) { subs.per[id].forEach(u => u()); delete subs.per[id]; delete S.todos[id]; delete S.events[id]; }
     for (const id of ids) if (!subs.per[id]) subs.per[id] = ["todos", "events"].map(key =>
@@ -725,7 +726,7 @@ function editProject(p) {
       links: rawLinks.map(l => ({ group: l.group || "기타", label: l.label, url: safeUrl(l.url), icon: iconSrc(l.icon) })),
       members, memberEmails: [...new Set(members.map(m => m.email).filter(Boolean))],   // 이 목록에 있는 메일만 과제를 열 수 있다 (보안 규칙이 확인)
       milestones: rows(sBox, ["date", "label", "done"]).filter(m => m.label).sort((a, b) => (a.date || "9").localeCompare(b.date || "9")),
-      notices: p.notices || [], docs: p.docs || [], icon: ic, color: colorVal,
+      notices: p.notices || [], docs: p.docs || [], icon: ic, color: colorVal, ...(typeof p.order === "number" ? { order: p.order } : {}),
       createdAt: p.createdAt || new Date().toISOString(),
     };
     busy(form, true);
@@ -760,6 +761,26 @@ function editProject(p) {
     }));
   cHex.id = "f-hex"; [title, icon].forEach(el => el.addEventListener("input", showIcon)); setColor(colorVal);
   openDlg(form);
+}
+
+/* ---------- 과제 순서 (관리자) ---------- */
+function orderProjects() {
+  const box = h("div", { class: "stack", style: "gap:6px" });
+  const move = (row, dir) => { const sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling; if (!sib) return; if (dir < 0) box.insertBefore(row, sib); else box.insertBefore(sib, row); };
+  S.projects.forEach(p => { const row = h("div", { class: "subrow", style: "flex-wrap:nowrap", "data-id": p.id }, projTile(p),
+      h("span", { style: "flex:1;min-width:0;font-weight:500;overflow-wrap:anywhere" }, p.title),
+      h("button", { class: "btn", type: "button", "aria-label": `${p.title} 위로`, onclick: () => move(row, -1) }, "↑"),
+      h("button", { class: "btn", type: "button", "aria-label": `${p.title} 아래로`, onclick: () => move(row, 1) }, "↓")); box.append(row); });
+  const err = h("span", { class: "err" });
+  const form = h("form", { class: "dlg", onsubmit: async ev => { ev.preventDefault(); busy(form, true);
+    const ids = [...box.children].map(r => r.getAttribute("data-id"));
+    const ok = await save("과제 순서를 저장", async () => { const b = writeBatch(db); ids.forEach((id, n) => b.update(doc(db, "projects", id), { order: n })); await b.commit(); });
+    if (ok) closeDlg(); else busy(form, false);
+  } },
+    h("h2", null, "과제 순서"),
+    h("div", { class: "help" }, "↑ ↓로 옮긴 뒤 저장하면 왼쪽 메뉴, 연구기간 표, 달력 범례가 이 순서로 나옵니다. 새로 추가한 과제는 맨 아래에 붙습니다. 이 순서는 연구진 화면에도 똑같이 적용됩니다."),
+    box, dlgFoot(err, "저장"));
+  openDlg(form, true);
 }
 
 /* ---------- 과제 유형 관리 (관리자) ---------- */
@@ -1164,7 +1185,7 @@ function monthPos(d, year, endOfDay) {
 }
 function timeline() {   // 모든 과제를 하나의 달력 축 위에 색이 다른 막대로 겹쳐 보여 준다
   const y = S.year, t = today();
-  const all = [...S.projects].sort((a, b) => (a.start || "9").localeCompare(b.start || "9") || a.title.localeCompare(b.title));
+  const all = S.projects;   // 관리자가 정한 과제 순서를 그대로 따른다
   const inYear = all.filter(p => { const s = D(p.start), e = D(p.end); return s && e && s.getFullYear() <= y && e.getFullYear() >= y; });
   const rest = all.filter(p => !inYear.includes(p));
   const cnt = k => inYear.filter(p => status(p).key === k).length;
@@ -1495,7 +1516,7 @@ function viewHome() {
       h("p", { class: "muted", style: "margin:0" }, "관리자가 등록한 메일의 Google 계정으로 로그인하면 참여하는 과제로 바로 이동합니다. 비밀번호를 따로 입력하지 않습니다."),
       h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "Google 계정으로 로그인"))));
   const admin = S.isAdmin, tdy = iso(today());
-  const rooms = [...S.projects].sort((a, b) => a.title.localeCompare(b.title));
+  const rooms = S.projects;
   loadWeather();
   const hello = h("div", { class: "hello" }, greetLine(null), weatherLine());
   const head = h("div", { class: "row spread", style: "align-items:flex-start" },
@@ -1921,7 +1942,7 @@ function render() {
   const isRoom = /^p-/.test(hash0);
   hdr.replaceChildren(h("a", { class: "brand", href: "#home" }, "연구과제 관리"), ...(S.user ? [
       h("nav", { class: "nav", "aria-label": "화면" }, navA("home", "홈", !isRoom && hash0 !== "calendar" && hash0 !== "work"), navA("calendar", S.isAdmin ? "전체 캘린더" : "내 캘린더", hash0 === "calendar"), S.isAdmin ? navA("work", "근무시간", hash0 === "work") : null),
-      S.projects.length ? h("nav", { class: "nav", "aria-label": "과제" }, h("div", { class: "navlabel" }, "과제"), [...S.projects].sort((a, b) => a.title.localeCompare(b.title)).map(p => h("a", { class: "navp", href: "#p-" + p.id, "aria-current": hash0 === "p-" + p.id || hash0.startsWith("p-" + p.id + "-") ? "page" : null }, projTile(p), h("span", { style: "min-width:0" }, p.title, (n => n ? h("span", { class: "navcnt num", title: `남은 할 일 ${n}건` }, ` (${n})`) : null)((S.todos[p.id] || []).filter(t => !t.done && (S.isAdmin || isMine(t))).length))))) : null,
+      S.projects.length ? h("nav", { class: "nav", "aria-label": "과제" }, h("div", { class: "navlabel row spread", style: "flex-wrap:nowrap" }, h("span", null, "과제"), S.isAdmin && S.projects.length > 1 ? h("button", { class: "linkbtn", type: "button", onclick: orderProjects }, "순서") : null), S.projects.map(p => h("a", { class: "navp", href: "#p-" + p.id, "aria-current": hash0 === "p-" + p.id || hash0.startsWith("p-" + p.id + "-") ? "page" : null }, projTile(p), h("span", { style: "min-width:0" }, p.title, (n => n ? h("span", { class: "navcnt num", title: `남은 할 일 ${n}건` }, ` (${n})`) : null)((S.todos[p.id] || []).filter(t => !t.done && (S.isAdmin || isMine(t))).length))))) : null,
       isRoom ? null : railTools(),
       h("div", { class: "railfoot" }, h("span", { class: "who" }, `${S.user.name || S.user.email}${S.isAdmin ? " · 관리자" : ""}`), h("button", { class: "btn quiet", type: "button", onclick: () => signOut(auth) }, "로그아웃"))]
     : [h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "로그인")), railTools()]));
