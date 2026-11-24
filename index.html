@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>연구과제 관리</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#ffffff">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Hahmlet:wght@500;600&family=IBM+Plex+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet">
@@ -2095,7 +2099,21 @@ function notify(key, title, body, href, sticky) {
     h("button", { class: "popx", type: "button", "aria-label": "알림 닫기", onclick: () => card.remove() }, "×"));
   box.append(card); while (box.children.length > 6) box.firstChild.remove();
   if (!sticky) setTimeout(() => card.remove(), 60000);
-  if (ntDesktop()) { try { const n = new Notification(title, { body: body || "", tag: key }); n.onclick = () => { window.focus(); if (href) location.hash = href.slice(1); n.close(); }; } catch {} }
+  if (ntDesktop()) ntSystem(key, title, body, href);
+}
+// Windows 알림 센터로 보낸다. 서비스 워커가 있으면 [확인][닫기] 단추가 붙고 누를 때까지 남아 있다.
+let ntReg = null;
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").then(r => { ntReg = r; }).catch(() => {});
+  navigator.serviceWorker.addEventListener("message", ev => { const d = ev.data || {}; if (d.type === "nt-open" && d.href) location.hash = d.href.slice(1); });
+}
+async function ntSystem(key, title, body, href) {
+  const opt = { body: body || "", tag: key, icon: "icon-192.png", data: { href: href || "" } };
+  try {
+    const reg = ntReg || ("serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null);
+    if (reg && reg.showNotification) { await reg.showNotification(title, { ...opt, requireInteraction: true, actions: [{ action: "ok", title: "확인" }, { action: "close", title: "닫기" }] }); return; }
+  } catch {}
+  try { const n = new Notification(title, opt); n.onclick = () => { window.focus(); if (href) location.hash = href.slice(1); n.close(); }; } catch {}
 }
 async function ntToggle() {
   NT.on = !NT.on; try { localStorage.setItem("nt-on", NT.on ? "1" : "0"); } catch {}
@@ -2162,7 +2180,7 @@ function render() {
       S.projects.length ? h("nav", { class: "nav", "aria-label": "과제" }, h("div", { class: "navlabel row spread", style: "flex-wrap:nowrap" }, h("span", null, "과제"), S.isAdmin && S.projects.length > 1 ? h("button", { class: "linkbtn", type: "button", onclick: orderProjects }, "순서") : null), S.projects.map(p => h("a", { class: "navp", href: "#p-" + p.id, "aria-current": hash0 === "p-" + p.id || hash0.startsWith("p-" + p.id + "-") ? "page" : null }, projTile(p), h("span", { style: "min-width:0" }, p.title, (n => n ? h("span", { class: "navcnt num", title: `남은 할 일 ${n}건` }, ` (${n})`) : null)((S.todos[p.id] || []).filter(t => !t.done && (S.isAdmin || isMine(t))).length))))) : null,
       isRoom ? null : railTools(),
       h("div", { class: "railfoot" }, h("span", { class: "who" }, `${S.user.name || S.user.email}${S.isAdmin ? " · 관리자" : ""}`),
-        h("button", { class: "btn quiet", type: "button", "aria-pressed": String(NT.on), title: "사이트가 열려 있는 동안 일정 알림을 화면 오른쪽 아래에 띄웁니다", onclick: ntToggle }, NT.on ? (ntDesktop() ? "일정 알림 켜짐" : "일정 알림 켜짐 (화면 안)") : "일정 알림 꺼짐"),
+        h("button", { class: "btn quiet", type: "button", "aria-pressed": String(NT.on), title: "사이트가 열려 있는 동안 일정 알림을 띄웁니다. 브라우저 알림 권한을 허용하면 Windows 알림으로도 뜹니다", onclick: ntToggle }, NT.on ? (ntDesktop() ? "일정 알림 켜짐 (Windows)" : "일정 알림 켜짐 (화면 안)") : "일정 알림 꺼짐"),
         h("button", { class: "btn quiet", type: "button", onclick: () => signOut(auth) }, "로그아웃"))]
     : [h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "로그인")), railTools()]));
   if (hash0 === "work" && S.isAdmin) {   // 입력 중인 표가 다시 그려져 지워지지 않도록 한 번만 만든다
