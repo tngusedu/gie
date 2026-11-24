@@ -387,6 +387,10 @@ body{word-break:keep-all;overflow-wrap:anywhere}
 .popx{border:0;background:transparent;cursor:pointer;color:var(--muted);font-size:18px;line-height:1;padding:0 4px}
 .popx:hover{color:var(--ink)}
 .sitem .small{margin-left:-2px}
+.strip{flex-direction:column;gap:0;padding:0}
+.striprow{display:flex;gap:8px 28px;flex-wrap:wrap;align-items:baseline;padding:12px 20px}
+.striprow + .striprow{border-top:1px solid var(--line)}
+.slabel{font-weight:600;font-size:14px}
 </style>
 </head>
 <body>
@@ -1608,14 +1612,17 @@ function briefData() {
   }
   return B;
 }
-function briefLines(B) {   // 데스크톱 알림에 넣을 글
-  const out = [];
-  B.trips.slice(0, 2).forEach(tr => out.push(`${tr.today ? "오늘" : "D-" + tr.dday} ${tr.label}: ${tr.text}`));   // 출장·외부활동이 있으면 맨 위에 일시·장소와 함께
-  out.push(`오늘 일정 ${B.todayN}건${B.todayList.length ? " (" + B.todayList.slice(0, 2).join(", ") + (B.todayList.length > 2 ? " 외" : "") + ")" : ""}`);
-  out.push(`지연된 할 일 ${B.lateN}건 · 7일 내 마감 ${B.msN}건`);
-  out.push(B.admin ? `수행 중 과제 ${B.activeN}건 (올해 수행 과제 수: ${B.yearN})` : `참여 중 과제 ${B.activeN}건`);
-  if (B.leave) out.push(`연가 잔여 ${dayN(B.leave.annualLeft)}일`);
-  if (B.work) out.push(`근무시간 ${fmtHM(B.work.total)} / 기준 ${B.work.std}h${B.work.inTime ? " · 오늘 출근 " + B.work.inTime : ""}`);
+function todayAlert() {   // 일정 알림에 넣을 것: 오늘의 출장·외부활동, 오늘의 회의·행사, 오늘 해야 할 일
+  const admin = S.isAdmin, tdy = iso(today()), out = [];
+  if (admin) meItems().forEach(it => { if (!isOuting(it.kind) || !schedDays(it).includes(tdy)) return; const sc = sched(it);
+    out.push(`${it.kind === "ext" ? `외부활동(${EXTMODE[it.mode] || EXTMODE.paper})` : it.external ? "외부활동 출장" : "출장"}: ${[it.title, sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : sc.end !== sc.start ? `${shortD(sc.start)}~${shortD(sc.end)}` : "종일", it.place].filter(Boolean).join(" · ")}`); });
+  const meet = [];
+  S.projects.forEach(p => (S.events[p.id] || []).forEach(e => { if (e.date === tdy) meet.push({ t: e.time || "99", s: `회의: ${[(e.time ? timeOf(e) + " " : "") + e.title, e.place, p.title].filter(Boolean).join(" · ")}` }); }));
+  if (admin) meItems().forEach(it => { if (it.kind === "event" && schedDays(it).includes(tdy)) { const sc = sched(it); meet.push({ t: sc.time || "99", s: `행사: ${[(sc.time ? sc.time + " " : "") + it.title, it.place].filter(Boolean).join(" · ")}` }); } });
+  meet.sort((a, b) => a.t.localeCompare(b.t)).forEach(m => out.push(m.s));
+  const todo = openTasks(x => admin ? x.assignee === me() : isMine(x)).filter(x => schedDays(x.t).includes(tdy));
+  todo.slice(0, 6).forEach(x => out.push(`할 일: ${(sched(x.t).time ? sched(x.t).time + " " : "") + x.t.title}`));
+  if (todo.length > 6) out.push(`할 일 외 ${todo.length - 6}건`);
   return out;
 }
 
@@ -1640,8 +1647,17 @@ function viewHome() {
   const B = briefData(), todayN = B.todayN, lateN = B.lateN, msN = B.msN;
   const stat = (label, v, warn, sub) => h("span", { class: "sitem" }, h("span", { class: "muted" }, label), h("b", { class: "num" + (warn && v ? " late" : "") }, v), sub ? h("span", { class: "small muted num" }, sub) : null);
   hello.replaceChildren(greetLine({ late: lateN, today: todayN, projects: rooms.length }), weatherLine());
-  const strip = h("div", { class: "strip" }, stat("오늘 일정", todayN), stat("지연된 할 일", lateN, true), stat("7일 안 마감", msN),
-    stat(admin ? "수행 중 과제" : "참여 중 과제", B.activeN, false, admin ? `(올해 수행 과제 수: ${B.yearN})` : null), B.leave ? stat("연가 잔여", dayN(B.leave.annualLeft) + "일") : null);
+  const W = B.work;
+  const workRow = !admin ? null : h("div", { class: "striprow" }, h("span", { class: "slabel" }, `${n.getMonth() + 1}월 근무시간`),
+    S.workState === "denied" ? h("span", { class: "err" }, "근무시간 기록을 읽을 권한이 없습니다. 새 firestore.rules를 Firebase 규칙 탭에 게시해 주세요.")
+    : !W ? h("span", { class: "muted" }, "불러오는 중…")
+    : [stat("합계", fmtHM(W.total)), stat("기준", W.std + "h"), h("span", { class: "sitem" }, h("span", { class: "muted" }, "초과/부족"), h("b", { class: "num", style: `color:${W.diff >= 0 ? "var(--ok)" : "var(--crit)"}` }, (W.diff >= 0 ? "+" : "-") + fmtHM(W.diff))),
+       stat("오늘 출근", W.inTime || "—"), stat("퇴근", W.outTime || "—")],
+    h("a", { class: "small", href: "#work", style: "margin-left:auto" }, "근무시간 입력"));
+  const strip = h("div", { class: "strip" },
+    h("div", { class: "striprow" }, stat("오늘 일정", todayN), stat("지연된 할 일", lateN, true), stat("7일 안 마감", msN),
+      stat(admin ? "수행 중 과제" : "참여 중 과제", B.activeN, false, admin ? `(올해 수행 과제 수: ${B.yearN})` : null), B.leave ? stat("연가 잔여", dayN(B.leave.annualLeft) + "일") : null),
+    workRow);
   const noProj = rooms.length ? null : h("section", { class: "panel muted" }, admin ? "아직 과제가 없습니다. ‘과제 추가’를 눌러 과제명·연구기간·연구진 메일을 넣어 주세요. 등록한 과제는 왼쪽 메뉴에 나옵니다."
     : `${me()} 계정으로 등록된 과제가 없습니다. 관리자에게 이 메일 주소를 연구진으로 등록해 달라고 요청해 주세요.`);
   // 일의 흐름대로: 전체 파악 → 내가 할 일 → 맡긴 일 (오른쪽에는 일정·근무) → 공지 → 과제 현황 → 도구
@@ -1652,7 +1668,7 @@ function viewHome() {
         rooms.length || (admin && meItems().length) ? agenda() : null,
         mineCard,
         admin ? taskCard("내가 요청한 업무", t => t.assignee !== me() && (!t.by || t.by === me()), "req", "요청한 업무가 없습니다.") : null),
-      h("div", { class: "stack" }, upcomingCard(), admin ? tripCard() : null, miniCal(), admin ? workCard() : null, admin ? leaveCard() : null)),
+      h("div", { class: "stack" }, upcomingCard(), admin ? tripCard() : null, miniCal(), admin ? leaveCard() : null)),
     noticesCard(),
     admin ? timeline() : null);
 }
@@ -2047,14 +2063,8 @@ function ntTick() {
     (S.todos[p.id] || []).forEach(t => { const sc = sched(t); if (!t.done && (admin || isMine(t)) && sc.start === tdy && sc.time) timed.push({ key: "t" + t.id, time: sc.time, title: t.title, sub: p.title, href: "#p-" + p.id + "-todo" }); });
   }
   if (admin) meItems().forEach(it => { const sc = sched(it); if (sc.start === tdy && sc.time && !(it.kind === "work" && it.done)) timed.push({ key: "m" + it.id, time: sc.time, title: meTitle(it), sub: [PKIND[it.kind], it.place].filter(Boolean).join(" · "), href: "#calendar" }); });
-  // 하루 한 번: 오늘 일정과 지연된 할 일
-  const late = openTasks(t => admin || isMine(t)).filter(x => schedText(x.t).late).length;
-  // 하루 한 번: 오늘의 브리핑 (출장·외부활동, 오늘 일정, 지연, 7일 내 마감, 과제 수, 연가 잔여, 근무시간). 관리자는 내 일정과 근무 기록이 다 모인 뒤에 띄운다.
-  if (!admin || (S.me && S.workState !== "loading")) { const B = briefData(); notify("digest", `오늘의 브리핑 · ${fmtDay(tdy)}`, briefLines(B).join("\n"), "#home", true); }
-  // 기한이 오늘·내일이거나 지난 서류와 마감
-  if (admin) meItems().filter(it => isOuting(it.kind)).forEach(it => tripSteps(it).forEach(sp => { if (sp.done || sp.due > tmr || (sp.phase === "after" && sched(it).start > tdy)) return;
-    notify("step:" + it.id + sp.key, `${PKIND[it.kind]} 서류: ${sp.label}`, `${it.title} · ${sp.due < tdy ? `기한이 ${days(D(sp.due), today())}일 지났습니다` : sp.due === tdy ? "오늘까지입니다" : "내일까지입니다"}`, "#home"); }));
-  for (const p of S.projects) (p.milestones || []).forEach((x, n) => { if (!x.done && (x.date === tdy || x.date === tmr)) notify("ms:" + p.id + n + x.date, `마감: ${x.label}`, `${p.title} · ${x.date === tdy ? "오늘입니다" : "내일입니다"}`, "#p-" + p.id); });
+  // 하루 한 번: 오늘 해야 할 일과 오늘의 출장·회의. 아무것도 없으면 띄우지 않는다. 관리자는 내 일정이 모인 뒤에 띄운다.
+  if (!admin || S.me) { const lines = todayAlert(); if (lines.length) notify("digest", `오늘 일정 · ${fmtDay(tdy)}`, lines.join("\n"), "#home", true); }
   // 곧 시작하는 일정은 맨 마지막에 띄워 가장 아래(가장 눈에 띄는 자리)에 남게 한다
   timed.forEach(x => { const m = toMin(x.time) - nowMin; if (m >= 0 && m <= NT.lead) notify("soon:" + x.key + x.time, m === 0 ? `지금 시작: ${x.title}` : `${m}분 뒤: ${x.title}`, `${x.time} · ${x.sub}`, x.href); });
 }
