@@ -1097,7 +1097,7 @@ function agenda() {
     i.todo ? h("input", { type: "checkbox", "aria-label": `${i.title} 완료`, onchange: ev => toggleTodo(i.p, i.todo, ev.target.checked) }) : h("span", { style: "flex:0 0 18px" }),
     h("span", { class: "kind k-" + (i.kind === "마감" ? "ms" : i.kind === "회의" ? "ev" : "td") }, i.kind),
     h("span", { class: "tmain" }, h("span", { class: "ttitle" }, i.title),
-      i.p.id === "_me" ? h("button", { class: "linkbtn", type: "button", style: "display:block", onclick: () => personalDialog(i.me || meById(i.todo.id)) }, i.me ? [kindLabel(i.me.kind), schedText(i.me).text, i.me.place].filter(Boolean).join(" · ") : i.todo._label || PKIND.work)
+      i.p.id === "_me" ? h("button", { class: "linkbtn", type: "button", style: "display:block", onclick: () => personalDialog(i.me || meById(i.todo.id)) }, i.me ? [kindLabel(i.me.kind), schedText(i.me).text, i.me.place].filter(Boolean).join(" · ") : i.todo._label || kindLabel("work"))
       : h("a", { class: "small", style: "display:block", href: "#p-" + i.p.id + (i.kind === "회의" ? "-cal" : i.kind === "할 일" ? "-todo" : "") },
         [i.p.title, i.todo ? "담당 " + whoName(i.p, i.todo.assignee) : null, i.ev ? [timeOf(i.ev), i.ev.place].filter(Boolean).join(" · ") : null].filter(Boolean).join(" · "))),
     i.todo ? (i.date ? h("span", { class: "due num" + (i.late ? " late" : "") }, i.stx.text + (i.stx.rel ? " · " + i.stx.rel : "")) : null)
@@ -1342,28 +1342,28 @@ const PCOLOR = { work: "#3b55a6", event: "#b3581e", trip: "#84479a", ext: "#c241
 const KCOLORS = ["#0b7285", "#6b4fbb", "#b0413e", "#3d7a2a", "#9a6b00", "#3f6aa8", "#a0457a", "#5d6d7e"];
 const baseKind = k => PKIND[k] ? k : "etc";              // 추가한 종류는 '기타'처럼 동작한다 (서류·연가 계산 없음)
 function kindList() { const saved = ((S.me && S.me.kinds) || []).filter(x => x && x.id && (PKIND[x.id] || x.label)), ids = saved.map(x => x.id);
-  return [...saved, ...Object.keys(PKIND).filter(k => !ids.includes(k)).map(id => ({ id }))].map(x => ({ id: x.id, label: PKIND[x.id] || x.label, color: PKIND[x.id] ? PCOLOR[x.id] : x.color || PCOLOR.etc, custom: !PKIND[x.id] })); }
-const kindLabel = k => PKIND[k] || (kindList().find(x => x.id === k) || {}).label || PKIND.etc;
+  return [...saved, ...Object.keys(PKIND).filter(k => !ids.includes(k)).map(id => ({ id }))].map(x => ({ id: x.id, label: x.label || PKIND[x.id], color: PKIND[x.id] ? PCOLOR[x.id] : x.color || PCOLOR.etc, custom: !PKIND[x.id] })); }
+const kindLabel = k => (kindList().find(x => x.id === k) || {}).label || PKIND[k] || kindLabel("etc");   // 기본 종류도 이름을 바꿀 수 있다
 const kindColor = k => PCOLOR[k] || (kindList().find(x => x.id === k) || {}).color || PCOLOR.etc;
 function manageKinds() {
   const box = h("div", { class: "stack", style: "gap:8px" });
   const add = k => { const row = h("div", { class: "subrow krow", style: "flex-wrap:nowrap", "data-id": k.id },
-      k.custom ? h("input", { type: "text", value: k.label || "", maxlength: 20, placeholder: "종류 이름", "aria-label": "종류 이름" }) : h("span", { style: "flex:1;min-width:0;font-weight:500" }, k.label, h("span", { class: "small muted" }, " · 기본")),
+      h("input", { type: "text", value: k.label || "", maxlength: 20, placeholder: k.custom ? "종류 이름" : PKIND[k.id], "aria-label": k.custom ? "종류 이름" : `${PKIND[k.id]} 종류의 이름`, title: k.custom ? null : `기본 종류: ${PKIND[k.id]}` }),
       k.custom ? h("input", { type: "color", value: k.color, "aria-label": "색", style: "flex:0 0 40px;width:40px;padding:2px" }) : h("i", { class: "lg-dot", style: `background:${k.color};flex:0 0 12px`, "aria-hidden": "true" }),
-      k.custom ? h("button", { class: "btn quiet", type: "button", onclick: () => row.remove() }, "지우기") : null);
+      k.custom ? h("button", { class: "btn quiet", type: "button", onclick: () => row.remove() }, "지우기") : h("span", { class: "small muted", style: "flex:0 0 auto;padding:0 10px", title: `원래 이름: ${PKIND[k.id]}` }, "기본"));
     box.append(grip(row, box, k.label || "새 종류")); return row; };
   kindList().forEach(add);
   const err = h("span", { class: "err" });
   const form = h("form", { class: "dlg", onsubmit: async ev => { ev.preventDefault(); err.textContent = "";
-    const kinds = [...box.querySelectorAll(".krow")].map(r => { const id = r.getAttribute("data-id"), t = r.querySelector("input[type=text]"); return t ? { id, label: t.value.trim(), color: r.querySelector("input[type=color]").value } : { id }; });
+    const kinds = [...box.querySelectorAll(".krow")].map(r => { const id = r.getAttribute("data-id"), t = r.querySelector("input[type=text]"); const label = t.value.trim(); return PKIND[id] ? (label && label !== PKIND[id] ? { id, label } : { id }) : { id, label, color: r.querySelector("input[type=color]").value }; });
     if (kinds.some(k => !PKIND[k.id] && !k.label)) { err.textContent = "종류 이름을 비워 둘 수 없습니다."; return; }
-    const names = kinds.map(k => PKIND[k.id] || k.label); if (new Set(names).size !== names.length) { err.textContent = "같은 이름의 종류가 있습니다."; return; }
+    const names = kinds.map(k => k.label || PKIND[k.id]); if (new Set(names).size !== names.length) { err.textContent = "같은 이름의 종류가 있습니다."; return; }
     const keep = new Set(kinds.map(k => k.id));
     busy(form, true);
     if (await saveMe({ kinds, items: meRaw().map(x => PKIND[x.kind] || keep.has(x.kind) ? x : { ...x, kind: "etc" }) }, "일정 종류를 저장")) closeDlg(); else busy(form, false);
   } },
     h("h2", null, "일정 종류 관리"),
-    h("div", { class: "help" }, "줄 앞의 ⠿를 끌어서 순서를 바꿉니다. 이 순서대로 ‘내 일정 추가’의 종류 목록에 나옵니다. 추가한 종류는 ‘기타’처럼 날짜·시간·장소·반복을 넣을 수 있고, 지우면 그 종류의 일정은 ‘기타’로 옮겨집니다. 기본 종류는 이름을 바꾸거나 지울 수 없습니다."),
+    h("div", { class: "help" }, "줄 앞의 ⠿를 끌어서 순서를 바꿉니다. 이 순서대로 ‘내 일정 추가’의 종류 목록에 나옵니다. 추가한 종류는 ‘기타’처럼 날짜·시간·장소·반복을 넣을 수 있고, 지우면 그 종류의 일정은 ‘기타’로 옮겨집니다. 기본 종류(‘기본’ 표시)는 이름을 바꿀 수 있지만 지울 수는 없습니다. 이름을 비우면 원래 이름으로 돌아갑니다. 이름을 바꿔도 출장 서류, 연가·병가 계산 같은 기능은 그대로 따라갑니다."),
     box, h("div", null, h("button", { class: "btn", type: "button", onclick: () => add({ id: "c" + newId(), label: "", color: KCOLORS[box.querySelectorAll("input[type=color]").length % KCOLORS.length], custom: true }).querySelector("input[type=text]").focus() }, "종류 추가")),
     dlgFoot(err, "저장"));
   openDlg(form, true);
@@ -1521,7 +1521,7 @@ function tripCard() {   // 일정 요약 바로 아래: 다가오는 출장과, 
     trips.length ? trips.map(({ it, sc, steps }) => { const stx = schedText(it), past = sc.end < tdy;
       return h("div", { class: "trip" },
         h("button", { class: "triphead", type: "button", title: "눌러서 수정", onclick: () => personalDialog(it) },
-          h("b", null, it.title), h("span", { class: "chip", style: "margin-left:6px" }, it.kind === "ext" ? `외부활동 · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.external ? "외부활동 출장" : "출장"),
+          h("b", null, it.title), h("span", { class: "chip", style: "margin-left:6px" }, it.kind === "ext" ? `${kindLabel("ext")} · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel("trip")),
           h("span", { class: "small muted num", style: "display:block" }, [stx.text + (past ? (it.kind === "ext" ? " · 끝남" : " · 다녀옴") : stx.rel ? " · " + stx.rel : ""), it.place].filter(Boolean).join(" · "))),
         steps.map(sp => { const late = !sp.done && sp.due < tdy, wait = sp.phase === "after" && sc.start > tdy;
           return h("label", { class: "tstep" + (sp.done ? " done" : "") },
@@ -1567,7 +1567,7 @@ function taskCard(title, pick, key, empty) {
         h("input", { type: "checkbox", disabled: !can, "aria-label": `${t.title} 완료`, onchange: ev => toggleTodo(p, t, ev.target.checked) }),
         h("span", { class: "st " + cls }, label),
         S.isAdmin ? h("button", { class: "tt", type: "button", title: "눌러서 수정", onclick: () => todoDialog(p, t) }, t.title) : h("span", { class: "tt" }, t.title),
-        h("a", { class: "tp", href: p.id === "_me" ? "#calendar" : "#p-" + p.id + "-todo" }, p.id === "_me" ? (t._label || PKIND.work) : p.title + (key === "req" ? " · " + whoName(p, t.assignee) : "")),
+        h("a", { class: "tp", href: p.id === "_me" ? "#calendar" : "#p-" + p.id + "-todo" }, p.id === "_me" ? (t._label || kindLabel("work")) : p.title + (key === "req" ? " · " + whoName(p, t.assignee) : "")),
         h("span", { class: "td num" + (cls === "st-late" ? " late" : "") }, schedShort(t))); }))
       : h("div", { class: "muted small", style: "padding:8px 0" }, empty),
     all.length > 7 ? h("div", null, h("button", { class: "btn quiet small", type: "button", onclick: () => { S.more[key] = !more; render(); } }, more ? "접기" : `전체 ${all.length}건 보기`)) : null);
@@ -1589,7 +1589,7 @@ function upcomingCard() {
     (p.milestones || []).forEach(x => { if (!x.done && x.date >= tdy) items.push({ date: x.date, time: "", title: x.label, p, kind: "마감" }); });
   }
   if (S.isAdmin) nextOnly(meItems(), it => sched(it).end, tdy).forEach(it => { const sc = sched(it); if (it.kind === "work" || !sc.start || sc.end < tdy) return;
-    items.push({ date: sc.start < tdy ? tdy : sc.start, time: sc.time, title: meTitle(it), p: MEP, me: it, kind: (it.kind === "ext" ? `외부활동 · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.kind === "trip" && it.external ? "외부활동 출장" : kindLabel(it.kind)) + (it.place ? ` · ${it.place}` : "") + (sc.end !== sc.start ? ` · ${shortD(sc.end)}까지` : "") }); });
+    items.push({ date: sc.start < tdy ? tdy : sc.start, time: sc.time, title: meTitle(it), p: MEP, me: it, kind: (it.kind === "ext" ? `${kindLabel("ext")} · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.kind === "trip" && it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel(it.kind)) + (it.place ? ` · ${it.place}` : "") + (sc.end !== sc.start ? ` · ${shortD(sc.end)}까지` : "") }); });
   items.sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const when = i => { const d = D(i.date), n = days(t, d); return (n === 0 ? "오늘" : n < 7 ? WEEK[d.getDay()] : shortD(i.date)) + " " + (i.time || "종일"); };
   return h("section", { class: "panel stack", style: "gap:4px" },
@@ -1736,8 +1736,8 @@ function briefData() {
   const rooms = S.projects, mine = openTasks(x => admin ? x.assignee === me() : isMine(x));
   const todayList = [];   // 오늘 일정: 눌러서 펼쳐 볼 수 있게 종류·시간·장소까지 담는다
   rooms.forEach(p => (S.events[p.id] || []).forEach(e => { if (e.date === tdy) todayList.push({ time: e.time ? timeOf(e) : "", kind: "회의", title: e.title, sub: [e.place, p.title].filter(Boolean).join(" · "), p, open: () => eventDialog(p, e) }); }));
-  mine.forEach(x => { if (schedDays(x.t).includes(tdy)) { const sc = sched(x.t); todayList.push({ time: sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : "", kind: x.t._trip ? x.t._label + " 서류" : x.t._me ? "회사 업무" : "할 일", title: x.t.title, sub: x.p === MEP ? "" : x.p.title, p: x.p, href: x.p === MEP ? null : "#p-" + x.p.id + "-todo" }); } });
-  if (admin) meItems().forEach(it => { if (it.kind !== "work" && schedDays(it).includes(tdy)) { const sc = sched(it); todayList.push({ time: sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : "", kind: it.kind === "ext" ? `외부활동 · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.kind === "trip" && it.external ? "외부활동 출장" : kindLabel(it.kind), title: meTitle(it), sub: [it.place, sc.end !== sc.start ? `${shortD(sc.start)}~${shortD(sc.end)}` : ""].filter(Boolean).join(" · "), p: MEP, open: () => personalDialog(it) }); } });
+  mine.forEach(x => { if (schedDays(x.t).includes(tdy)) { const sc = sched(x.t); todayList.push({ time: sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : "", kind: x.t._trip ? x.t._label + " 서류" : x.t._me ? kindLabel("work") : "할 일", title: x.t.title, sub: x.p === MEP ? "" : x.p.title, p: x.p, href: x.p === MEP ? null : "#p-" + x.p.id + "-todo" }); } });
+  if (admin) meItems().forEach(it => { if (it.kind !== "work" && schedDays(it).includes(tdy)) { const sc = sched(it); todayList.push({ time: sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : "", kind: it.kind === "ext" ? `${kindLabel("ext")} · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.kind === "trip" && it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel(it.kind), title: meTitle(it), sub: [it.place, sc.end !== sc.start ? `${shortD(sc.start)}~${shortD(sc.end)}` : ""].filter(Boolean).join(" · "), p: MEP, open: () => personalDialog(it) }); } });
   todayList.sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
   const B = { admin, todayList, todayN: todayList.length,
     lateN: openTasks(x => admin || isMine(x)).filter(x => schedText(x.t).late).length,
@@ -1747,7 +1747,7 @@ function briefData() {
     totalN: rooms.length, trips: [], leave: null, work: null };
   if (admin) {
     B.trips = meItems().filter(it => isOuting(it.kind) && sched(it).end >= tdy).sort((a, b) => schedKey(a).localeCompare(schedKey(b)))
-      .map(it => { const sc = sched(it); return { it, today: sc.start <= tdy, dday: sc.start <= tdy ? 0 : days(t, D(sc.start)), label: it.kind === "ext" ? `외부활동(${EXTMODE[it.mode] || EXTMODE.paper})` : it.external ? "외부활동 출장" : "출장",
+      .map(it => { const sc = sched(it); return { it, today: sc.start <= tdy, dday: sc.start <= tdy ? 0 : days(t, D(sc.start)), label: it.kind === "ext" ? `${kindLabel("ext")}(${EXTMODE[it.mode] || EXTMODE.paper})` : it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel("trip"),
         when: schedText(it).text + (sc.time ? "" : " 종일"), text: [it.title, schedText(it).text, it.place].filter(Boolean).join(" · ") }; });
     const ls = leaveStats(); B.leave = ls.set ? ls : null;
     if (S.workState === "ok") { const rows = (S.work && S.work.rows) || [], w = workTotals(rows), std = stdHours(n.getFullYear(), n.getMonth() + 1), td = rows.find(x => x.day === n.getDate()) || {};
@@ -1758,7 +1758,7 @@ function briefData() {
 function todayAlert() {   // 일정 알림에 넣을 것: 오늘의 출장·외부활동, 오늘의 회의·행사, 오늘 해야 할 일
   const admin = S.isAdmin, tdy = iso(today()), out = [];
   if (admin) meItems().forEach(it => { if (!isOuting(it.kind) || !schedDays(it).includes(tdy)) return; const sc = sched(it);
-    out.push(`${it.kind === "ext" ? `외부활동(${EXTMODE[it.mode] || EXTMODE.paper})` : it.external ? "외부활동 출장" : "출장"}: ${[it.title, sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : sc.end !== sc.start ? `${shortD(sc.start)}~${shortD(sc.end)}` : "종일", it.place].filter(Boolean).join(" · ")}`); });
+    out.push(`${it.kind === "ext" ? `${kindLabel("ext")}(${EXTMODE[it.mode] || EXTMODE.paper})` : it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel("trip")}: ${[it.title, sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : sc.end !== sc.start ? `${shortD(sc.start)}~${shortD(sc.end)}` : "종일", it.place].filter(Boolean).join(" · ")}`); });
   const meet = [];
   S.projects.forEach(p => (S.events[p.id] || []).forEach(e => { if (e.date === tdy) meet.push({ t: e.time || "99", s: `회의: ${[(e.time ? timeOf(e) + " " : "") + e.title, e.place, p.title].filter(Boolean).join(" · ")}` }); }));
   if (admin) meItems().forEach(it => { if (it.kind === "event" && schedDays(it).includes(tdy)) { const sc = sched(it); meet.push({ t: sc.time || "99", s: `행사: ${[(sc.time ? sc.time + " " : "") + it.title, it.place].filter(Boolean).join(" · ")}` }); } });
