@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>연구과제 관리</title>
+<script>try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}</script>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon-192.png">
 <link rel="apple-touch-icon" href="icon-192.png">
@@ -2284,6 +2285,13 @@ function ntSoonSeen(key, date) {
     Object.keys(map).forEach(k => { if (map[k] < tdy) delete map[k]; }); map[key] = date; localStorage.setItem("nt-soon", JSON.stringify(map)); } catch {}
   return false;
 }
+// 화면 모드: 자동(기기 설정을 따름) → 밝게 → 어둡게. 이 브라우저에 저장한다.
+const THEMES = { auto: "화면: 자동", light: "화면: 밝게", dark: "화면: 어둡게" };
+function themeNow() { try { const v = localStorage.getItem("theme"); return THEMES[v] ? v : "auto"; } catch { return "auto"; } }
+function themeApply(v) { if (v === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", v); }
+function themeBtn() { const v = themeNow();
+  return h("button", { class: "btn quiet", type: "button", title: "누를 때마다 자동 → 밝게 → 어둡게로 바뀝니다. 자동은 기기(Windows·휴대폰)의 설정을 따릅니다.", onclick: () => { const next = { auto: "light", light: "dark", dark: "auto" }[themeNow()];
+    try { localStorage.setItem("theme", next); } catch {} themeApply(next); render(); } }, THEMES[v]); }
 function ntStart() { clearInterval(NT.timer); NT.timer = setInterval(ntTick, 30000); setTimeout(ntTick, 4000); }
 
 /* ---------- 왼쪽 바의 공통 바로가기 ---------- */
@@ -2331,8 +2339,9 @@ function render() {
       h("div", { class: "railfoot" }, h("span", { class: "who" }, `${S.user.name || S.user.email}${S.isAdmin ? " · 관리자" : ""}`),
         h("button", { class: "btn quiet", type: "button", "aria-pressed": String(NT.on), title: "사이트가 열려 있는 동안 일정 알림을 띄웁니다. 브라우저 알림 권한을 허용하면 Windows 알림으로도 뜹니다", onclick: ntToggle }, NT.on ? (ntDesktop() ? "일정 알림 켜짐 (Windows)" : "일정 알림 켜짐 (화면 안)") : "일정 알림 꺼짐"),
         h("button", { class: "btn quiet", type: "button", onclick: ntSettings }, "알림 시점 설정"),
+        themeBtn(),
         h("button", { class: "btn quiet", type: "button", onclick: () => signOut(auth) }, "로그아웃"))]
-    : [h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "로그인")), railTools()])].filter(Boolean));
+    : [h("div", null, h("button", { class: "btn primary", type: "button", onclick: login }, "로그인")), railTools(), h("div", { class: "railfoot" }, themeBtn())])].filter(Boolean));
   if (hash0 === "work" && S.isAdmin) {   // 입력 중인 표가 다시 그려져 지워지지 않도록 한 번만 만든다
     if (!S.workMounted) { S.workMounted = true; app.replaceChildren(mountWork()); }
     return;
