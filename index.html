@@ -361,6 +361,8 @@ body{word-break:keep-all;overflow-wrap:anywhere}
 .sw{width:26px;height:26px;border-radius:50%;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--line);cursor:pointer;padding:0}
 .sw.auto{width:auto;border-radius:99px;padding:0 10px;font-size:12.5px;background:var(--bg);color:var(--ink)}
 .sw[aria-pressed="true"]{box-shadow:0 0 0 2px var(--ink)}
+.pgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:0 28px}
+.pgrid .pitem{border-bottom:1px solid var(--line)}
 </style>
 </head>
 <body>
@@ -1503,17 +1505,21 @@ function viewHome() {
   hello.replaceChildren(greetLine({ late: lateN, today: todayN, projects: rooms.length }), weatherLine());
   const strip = h("div", { class: "strip" }, stat("오늘 일정", todayN), stat("지연된 할 일", lateN, true), stat("7일 안 마감", msN), stat(admin ? "과제" : "참여 과제", rooms.length), admin && leaveStats().set ? stat("연가 잔여", dayN(leaveStats().annualLeft) + "일") : null);
   const plist = h("section", { class: "panel stack", style: "gap:4px" }, h("div", { style: "padding-bottom:6px" }, h("h2", null, admin ? "과제" : "내 과제")),
-    rooms.length ? h("div", { class: "plist" }, rooms.map(r => { const c = (S.todos[r.id] || []).filter(t => !t.done && (admin || isMine(t))).length;
+    rooms.length ? h("div", { class: "plist pgrid" }, rooms.map(r => { const c = (S.todos[r.id] || []).filter(t => !t.done && (admin || isMine(t))).length;
         return h("a", { class: "pitem", href: "#p-" + r.id }, projTile(r), h("span", { class: "ptitle" }, r.title), h("span", { class: "lock" }, c ? `할 일 ${c}건` : "할 일 없음")); }))
       : h("div", { class: "muted small" }, admin ? "아직 과제가 없습니다. ‘과제 추가’를 눌러 과제명·연구기간·연구진 메일을 넣어 주세요." : `${me()} 계정으로 등록된 과제가 없습니다. 관리자에게 이 메일 주소를 연구진으로 등록해 달라고 요청해 주세요.`));
+  // 일의 흐름대로: 전체 파악 → 내가 할 일 → 맡긴 일 (오른쪽에는 일정·근무) → 공지 → 과제 현황 → 도구
+  const mineCard = taskCard(admin ? "내가 담당 중인 업무" : "내 할 일", t => admin ? t.assignee === me() : isMine(t), "mine", admin ? "담당 중인 업무가 없습니다. 과제의 ‘할 일’ 탭에서 담당을 ‘나 (관리자)’로 정하거나, ‘내 일정 추가’로 회사 업무를 넣으면 여기에 모입니다." : "지금 나에게 배정된 할 일이 없습니다.");
   return h("div", { class: "stack" }, head, strip,
-    h("div", { class: "dash" },   // 왼쪽 넓은 단: 업무 / 오른쪽 단: 일정 요약, 달력, 공지
+    h("div", { class: "dash" },
       h("div", { class: "stack" },
-        taskCard(admin ? "내가 담당 중인 업무" : "내 할 일", t => admin ? t.assignee === me() : isMine(t), "mine", admin ? "담당 중인 업무가 없습니다. 과제의 ‘할 일’ 탭에서 담당을 ‘나 (관리자)’로 정하면 여기에 모입니다." : "지금 나에게 배정된 할 일이 없습니다."),
-        admin ? taskCard("내가 요청한 업무", t => t.assignee !== me() && (!t.by || t.by === me()), "req", "요청한 업무가 없습니다.") : plist),
-      h("div", { class: "stack" }, upcomingCard(), miniCal(), noticesCard())),
-    admin ? h("div", { class: "dash3" }, plist, workCard(), leaveCard(), h("div", { class: "rcol" }, timeline())) : null,
-    admin && (rooms.length || meItems().length) ? agenda() : null,
+        rooms.length || (admin && meItems().length) ? agenda() : null,
+        mineCard,
+        admin ? taskCard("내가 요청한 업무", t => t.assignee !== me() && (!t.by || t.by === me()), "req", "요청한 업무가 없습니다.") : null),
+      h("div", { class: "stack" }, upcomingCard(), miniCal(), admin ? workCard() : null, admin ? leaveCard() : null)),
+    noticesCard(),
+    plist,
+    admin ? timeline() : null,
     linksSection());
 }
 
