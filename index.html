@@ -877,6 +877,26 @@ async function toggleTodo(p, t, on) {
   if (p.id === "_me") return toggleMe(t.id, on);
   await save("할 일을 바꾸", () => updateDoc(doc(db, "projects", p.id, "todos", t.id), { done: on, doneBy: on ? me() : "", doneAt: on ? new Date().toISOString() : "" }));
 }
+// 항목마다 알림 시점을 따로 정한다. alerts: null(기본 설정 따름) / [](알림 없음) / [분, …](시작 몇 분 전, 0은 정시)
+const AL_PRESET = [0, 10, 30, 60, 180, 1440];
+const alLabel = m => m === 0 ? "정시" : (m % 1440 === 0 ? `${m / 1440}일` : m % 60 === 0 ? `${m / 60}시간` : m > 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분` : `${m}분`) + " 전";
+const alNote = x => !Array.isArray(x.alerts) ? "" : x.alerts.length ? "알림 " + [...x.alerts].sort((a, b) => a - b).map(alLabel).join(", ") : "알림 없음";
+function alertEditor(cur, id) {
+  const mode = h("select", { id }, h("option", { value: "def" }, "기본 설정 따름"), h("option", { value: "custom" }, "직접 정하기"), h("option", { value: "none" }, "알림 없음"));
+  mode.value = !Array.isArray(cur) ? "def" : cur.length ? "custom" : "none";
+  const list = h("div", { class: "row alist", style: "gap:6px 14px" });
+  const add = (m, on) => { if (list.querySelector(`[data-m="${m}"]`)) { list.querySelector(`[data-m="${m}"]`).checked = true; return; }
+    list.append(h("label", { class: "row small", style: "gap:4px;flex-wrap:nowrap;white-space:nowrap" }, h("input", { type: "checkbox", checked: on, "data-m": String(m) }), alLabel(m))); };
+  [...new Set([...AL_PRESET, ...(Array.isArray(cur) ? cur : [])])].sort((a, b) => a - b).forEach(m => add(m, Array.isArray(cur) && cur.includes(m)));
+  const num = h("input", { type: "number", min: 1, max: 999, step: 1, style: "width:80px", "aria-label": "알림 시점 숫자", placeholder: "예: 45" });
+  const unit = h("select", { "aria-label": "단위", style: "width:auto" }, h("option", { value: "1" }, "분 전"), h("option", { value: "60" }, "시간 전"), h("option", { value: "1440" }, "일 전"));
+  const custom = h("div", { class: "stack", style: "gap:8px;margin-top:8px" }, list,
+    h("div", { class: "row", style: "gap:6px" }, num, unit, h("button", { class: "btn", type: "button", onclick: () => { const v = Math.round(Number(num.value)) * Number(unit.value); if (!(v > 0) || v > 43200) { num.focus(); return; } add(v, true); num.value = ""; } }, "시점 추가")),
+    h("div", { class: "help" }, "여러 시점을 고를 수 있습니다. 시간을 정하지 않은 종일 일정은 그날 오전 9시를 기준으로 계산합니다. 알림은 사이트가 열려 있을 때 뜹니다."));
+  const sync = () => { custom.hidden = mode.value !== "custom"; }; mode.addEventListener("change", sync); sync();
+  return { node: h("div", { class: "field" }, h("label", { for: id }, "알림"), mode, custom),
+    read: () => mode.value === "def" ? null : mode.value === "none" ? [] : [...list.querySelectorAll("input:checked")].map(i => Number(i.getAttribute("data-m"))).sort((a, b) => a - b) };
+}
 function todoDialog(p, t) {
   if (p.id === "_me") return personalDialog(meById(t.id));
   const isNew = !t; t = t || {};
@@ -893,7 +913,7 @@ function todoDialog(p, t) {
   const who = h("select", null, h("option", { value: "" }, "연구진 전체"), inList ? null : h("option", { value: me() }, "나 (관리자)"), (p.members || []).filter(m => m.email).map(m => h("option", { value: normEmail(m.email) }, `${m.name || m.email}${normEmail(m.email) === me() ? " (나)" : ""}`)));
   who.value = t.assignee || "";
   const memo = h("textarea", { maxlength: 600 }); memo.value = t.memo || "";
-  const refs = refEditor(t.refs);
+  const refs = refEditor(t.refs), al = alertEditor(t.alerts, "t-al");
   const err = h("span", { class: "err" });
   const form = h("form", { class: "dlg", onsubmit: async ev => {
     ev.preventDefault();
@@ -905,7 +925,7 @@ function todoDialog(p, t) {
     if (k === "time" && !time.value) { err.textContent = "시작 시간을 입력해 주세요."; return; }
     if (k === "time" && etime.value && etime.value < time.value) { err.textContent = "끝나는 시간이 시작 시간보다 빠릅니다."; return; }
     const sd = k === "none" ? "" : start.value, ed = k === "range" ? end.value : sd;
-    const item = { title: title.value.trim(), when: k, start: sd, end: ed, time: k === "time" ? time.value : "", endTime: k === "time" ? etime.value : "", due: ed, refs: refData, assignee: who.value, memo: memo.value.trim(), done: !!t.done, doneBy: t.doneBy || "", doneAt: t.doneAt || "", by: t.by || me(), createdAt: t.createdAt || new Date().toISOString() };
+    const item = { alerts: al.read(), title: title.value.trim(), when: k, start: sd, end: ed, time: k === "time" ? time.value : "", endTime: k === "time" ? etime.value : "", due: ed, refs: refData, assignee: who.value, memo: memo.value.trim(), done: !!t.done, doneBy: t.doneBy || "", doneAt: t.doneAt || "", by: t.by || me(), createdAt: t.createdAt || new Date().toISOString() };
     busy(form, true);
     if (await save("할 일을 저장", () => setDoc(doc(db, "projects", p.id, "todos", t.id || "t" + newId()), item))) closeDlg(); else busy(form, false);
   } },
@@ -913,7 +933,7 @@ function todoDialog(p, t) {
     field("할 일", "t-title", title),
     h("div", { class: "row", style: "align-items:flex-start" }, field("일정", "t-when", when), field("담당", "t-who", who)),
     h("div", { class: "row", style: "align-items:flex-start" }, fStart, fEnd, fTime, fEtime),
-    field("메모 (선택)", "t-memo", memo), refs.node,
+    field("메모 (선택)", "t-memo", memo), al.node, refs.node,
     dlgFoot(err, "저장", isNew ? null : async () => { if (await save("할 일을 삭제", () => deleteDoc(doc(db, "projects", p.id, "todos", t.id)))) closeDlg(); }));
   openDlg(form);
 }
@@ -1089,7 +1109,7 @@ function eventDialog(p, ev, date) {
   const t1 = h("input", { type: "time", value: ev.time || "" }), t2 = h("input", { type: "time", value: ev.endTime || "" });
   const place = h("input", { type: "text", value: ev.place || "", maxlength: 100, placeholder: "예: 연구원 3층 회의실, 온라인(Zoom)" });
   const memo = h("textarea", { maxlength: 600 }); memo.value = ev.memo || "";
-  const refs = refEditor(ev.refs);
+  const refs = refEditor(ev.refs), al = alertEditor(ev.alerts, "e-al");
   const rep = h("select", null, Object.entries(REPEAT).map(([v, l]) => h("option", { value: v }, l))); rep.value = REPEAT[ev.repeat] ? ev.repeat : "none";
   const until = h("input", { type: "date", value: ev.until || "" });
   const fUntil = field("반복 종료일", "e-until", until);
@@ -1102,7 +1122,7 @@ function eventDialog(p, ev, date) {
     const refData = refs.read(); if (!refData) { err.textContent = "참고 자료 링크는 https:// 로 시작해야 합니다."; return; }
     if (t1.value && t2.value && t2.value < t1.value) { err.textContent = "끝나는 시간이 시작 시간보다 빠릅니다."; return; }
     if (rep.value !== "none" && (!until.value || until.value < d.value)) { err.textContent = "반복 종료일을 시작 날짜와 같거나 그 뒤로 정해 주세요."; return; }
-    const item = { title: title.value.trim(), date: d.value, time: t1.value, endTime: t1.value ? t2.value : "", repeat: rep.value, until: rep.value === "none" ? "" : until.value, place: place.value.trim(), memo: memo.value.trim(), refs: refData, gcalId: ev.gcalId || "", gcalSyncedAt: ev.gcalSyncedAt || "", updatedAt: new Date().toISOString() };
+    const item = { alerts: al.read(), title: title.value.trim(), date: d.value, time: t1.value, endTime: t1.value ? t2.value : "", repeat: rep.value, until: rep.value === "none" ? "" : until.value, place: place.value.trim(), memo: memo.value.trim(), refs: refData, gcalId: ev.gcalId || "", gcalSyncedAt: ev.gcalSyncedAt || "", updatedAt: new Date().toISOString() };
     busy(form, true);
     if (await save("일정을 저장", () => setDoc(doc(db, "projects", p.id, "events", ev.id || "e" + newId()), item))) { const dd = D(item.date); S.cal = { y: dd.getFullYear(), m: dd.getMonth() }; closeDlg(); render(); } else busy(form, false);
   } },
@@ -1111,7 +1131,7 @@ function eventDialog(p, ev, date) {
     h("div", { class: "row", style: "align-items:flex-start" }, field(isNew ? "날짜" : ev.repeat && ev.repeat !== "none" ? "첫 날짜" : "날짜", "e-date", d), field("시작 시간 (선택)", "e-t1", t1), field("끝나는 시간 (선택)", "e-t2", t2)),
     h("div", { class: "row", style: "align-items:flex-start" }, field("반복", "e-rep", rep), fUntil),
     !isNew && ev.repeat && ev.repeat !== "none" ? h("div", { class: "help" }, "반복 일정입니다. 여기서 고치거나 삭제하면 모든 회차에 함께 적용됩니다.") : null,
-    field("장소 (선택)", "e-place", place), field("메모 (선택)", "e-memo", memo), refs.node,
+    field("장소 (선택)", "e-place", place), field("메모 (선택)", "e-memo", memo), al.node, refs.node,
     dlgFoot(err, "저장", isNew ? null : async () => {
       if (!await save("일정을 삭제", () => deleteDoc(doc(db, "projects", p.id, "events", ev.id)))) return;
       if (ev.gcalId && gToken()) { try { await gFetch("events/" + encodeURIComponent(ev.gcalId), { method: "DELETE" }); } catch {} }
@@ -1356,6 +1376,7 @@ function personalDialog(it, preset) {
   const daysIn = h("input", { type: "number", min: 0, step: "any", value: it.days != null ? it.days : "" });
   const place = h("input", { type: "text", value: it.place || "", maxlength: 100 });
   const memo = h("textarea", { maxlength: 600 }); memo.value = it.memo || "";
+  const al = alertEditor(it.alerts, "m-al");
   const fTitle = field("제목", "m-title", title), fStart = field("날짜", "m-start", start), fEnd = field("끝나는 날", "m-end", end), fTime = field("시작 시간", "m-time", time), fEtime = field("끝나는 시간 (선택)", "m-etime", etime);
   const fDays = field("사용 일수 (반차는 0.5)", "m-days", daysIn), fPlace = field("장소 (선택)", "m-place", place);
   const mrep = h("select", null, Object.entries(REPEAT).map(([v, l]) => h("option", { value: v }, l))); mrep.value = REPEAT[it.repeat] ? it.repeat : "none";
@@ -1402,7 +1423,7 @@ function personalDialog(it, preset) {
     const dn = lv ? parseFloat(daysIn.value) : 0;
     if (lv && !(dn >= 0)) { err.textContent = "사용 일수를 숫자로 입력해 주세요."; return; }
     const sd = w === "none" ? "" : start.value;
-    const item = { id: it.id || "m" + newId(), kind: k, title: title.value.trim() || (lv ? PKIND[k] : ""), when: w, start: sd, end: w === "range" ? end.value : sd, time: w === "time" ? time.value : "", endTime: w === "time" ? etime.value : "",
+    const item = { alerts: al.read(), id: it.id || "m" + newId(), kind: k, title: title.value.trim() || (lv ? PKIND[k] : ""), when: w, start: sd, end: w === "range" ? end.value : sd, time: w === "time" ? time.value : "", endTime: w === "time" ? etime.value : "",
       repeat: rp, until: rp === "none" ? "" : muntil.value,
       place: place.value.trim(), memo: memo.value.trim(), days: lv ? dn : 0, done: !!it.done, createdAt: it.createdAt || new Date().toISOString(),
       ...(k === "trip" ? { external: ext.value === "1", reportDays: Math.max(0, parseInt(rdays.value) || 0), steps: stepState } : k === "ext" ? { mode: mode.value, steps: stepState } : {}) };
@@ -1414,7 +1435,7 @@ function personalDialog(it, preset) {
     h("div", { class: "row", style: "align-items:flex-start" }, field("종류", "m-kind", kind), field("일정", "m-when", when)),
     fTitle, h("div", { class: "row", style: "align-items:flex-start" }, fStart, fEnd, fTime, fEtime),
     h("div", { class: "row", style: "align-items:flex-start" }, fRep, fUntil), fDays, fPlace,
-    h("div", { class: "row", style: "align-items:flex-start" }, fMode, fExt, fRd), stepBox, field("메모 (선택)", "m-memo", memo),
+    h("div", { class: "row", style: "align-items:flex-start" }, fMode, fExt, fRd), stepBox, field("메모 (선택)", "m-memo", memo), al.node,
     dlgFoot(err, "저장", isNew ? null : async () => { if (await ask("이 일정을 지울까요?", "지우기") && await saveMe({ items: meRaw().filter(x => x.id !== it.id) }, "일정을 지우")) closeDlg(); }));
   openDlg(form);
 }
@@ -2111,7 +2132,7 @@ const NT_LEADS = [[0, "정시 (시작할 때)"], [5, "5분 전"], [10, "10분 �
 try { if (localStorage.getItem("nt-on") === "0") NT.on = false;
   if (localStorage.getItem("nt-digest") === "0") NT.digest = false;
   const l = JSON.parse(localStorage.getItem("nt-leads") || "null"); if (Array.isArray(l)) NT.leads = l.filter(v => NT_LEADS.some(o => o[0] === v)); } catch {}
-const ntLeadText = m => m === 0 ? "지금 시작" : m % 60 === 0 ? `${m / 60}시간 뒤` : m > 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분 뒤` : `${m}분 뒤`;
+const ntLeadText = m => m === 0 ? "지금 시작" : m >= 1440 ? `${Math.floor(m / 1440)}일${m % 1440 >= 60 ? ` ${Math.floor(m % 1440 / 60)}시간` : ""} 뒤` : m % 60 === 0 ? `${m / 60}시간 뒤` : m > 60 ? `${Math.floor(m / 60)}시간 ${m % 60}분 뒤` : `${m}분 뒤`;
 function ntSettings() {
   const digest = h("input", { type: "checkbox", checked: NT.digest, id: "nt-digest" });
   const boxes = NT_LEADS.map(([v, label]) => h("label", { class: "row", style: "gap:6px" }, h("input", { type: "checkbox", checked: NT.leads.includes(v), "data-v": String(v) }), label));
@@ -2120,10 +2141,10 @@ function ntSettings() {
       NT.digest = digest.checked; NT.leads = boxes.map(b => b.querySelector("input")).filter(i => i.checked).map(i => Number(i.getAttribute("data-v")));
       try { localStorage.setItem("nt-digest", NT.digest ? "1" : "0"); localStorage.setItem("nt-leads", JSON.stringify(NT.leads)); } catch {}
       closeDlg(); toast("알림 시점을 저장했습니다."); ntTick(); } },
-    h("h2", null, "알림 시점"),
+    h("h2", null, "알림 시점 (기본값)"),
     h("div", { class: "field" }, h("label", { class: "row", style: "gap:6px" }, digest, "오늘 일정 요약 (그날 처음 열 때 한 번)")),
     h("div", { class: "field" }, h("span", { class: "flabel", style: "font-weight:600" }, "시간이 정해진 일정"), h("div", { class: "stack", style: "gap:6px;margin-top:6px" }, boxes),
-      h("div", { class: "help" }, "여러 개를 고르면 고른 시점마다 한 번씩 알립니다. 하나도 고르지 않으면 시각 알림은 오지 않습니다. 종일 일정은 오늘 일정 요약에만 나옵니다.")),
+      h("div", { class: "help" }, "여기서 고른 시점은 알림을 따로 정하지 않은 일정에 적용됩니다. 일정·할 일·출장마다 다르게 하려면 그 항목을 열어 ‘알림’을 ‘직접 정하기’로 바꾸세요.")),
     h("div", { class: "small muted" }, perm, typeof Notification !== "undefined" && Notification.permission === "default" ? h("button", { class: "linkbtn", type: "button", style: "margin-left:8px", onclick: async () => { try { await Notification.requestPermission(); } catch {} closeDlg(); render(); ntSettings(); } }, "허용하기") : null),
     h("div", { class: "small muted" }, "이 설정은 지금 쓰는 브라우저에만 저장됩니다. 알림은 사이트가 열려 있는 동안에만 옵니다."),
     dlgFoot(h("span", { class: "err" }), "저장"));
@@ -2170,19 +2191,28 @@ async function ntToggle() {
 function ntTick() {
   if (!NT.on || !S.user || !S.loaded.projects) return;
   const now = new Date(), tdy = iso(today()), tmr = addDays(tdy, 1), nowMin = now.getHours() * 60 + now.getMinutes(), admin = S.isAdmin;
-  const timed = [], dayList = dayItems(tdy);
+  // 알림 후보: 오늘부터 31일 안에 시작하는 것. 항목에 알림을 따로 정했으면 그 시점, 아니면 '알림 시점 설정'의 기본값(시간이 있는 오늘 일정만).
+  const timed = [], lim = addDays(tdy, 31);
+  const put = (key, date, time, alerts, title, sub, href) => { if (!date || date < tdy || date > lim) return;
+    const leads = Array.isArray(alerts) ? alerts : time && date === tdy ? NT.leads : []; if (!leads.length) return;
+    timed.push({ key: key + date, date, time, leads: [...leads].sort((a, b) => a - b), title, sub, href, m: days(today(), D(date)) * 1440 + toMin(time || "09:00") - nowMin }); };
   for (const p of S.projects) {
-    (S.events[p.id] || []).forEach(e => { if (e.date === tdy && e.time) timed.push({ key: "e" + e.id, time: e.time, title: e.title, sub: [p.title, e.place].filter(Boolean).join(" · "), href: "#p-" + p.id + "-cal" }); });
-    (S.todos[p.id] || []).forEach(t => { const sc = sched(t); if (!t.done && (admin || isMine(t)) && sc.start === tdy && sc.time) timed.push({ key: "t" + t.id, time: sc.time, title: t.title, sub: p.title, href: "#p-" + p.id + "-todo" }); });
+    (S.events[p.id] || []).forEach(e => put("e" + e.id, e.date, e.time || "", e.alerts, e.title, [p.title, e.place].filter(Boolean).join(" · "), "#p-" + p.id + "-cal"));
+    (S.todos[p.id] || []).forEach(t => { const sc = sched(t); if (!t.done && (admin || isMine(t))) put("t" + t.id, sc.start, sc.time || "", t.alerts, t.title, p.title, "#p-" + p.id + "-todo"); });
   }
-  if (admin) meItems().forEach(it => { const sc = sched(it); if (sc.start === tdy && sc.time && !(it.kind === "work" && it.done)) timed.push({ key: "m" + it.id, time: sc.time, title: meTitle(it), sub: [PKIND[it.kind], it.place].filter(Boolean).join(" · "), href: "#calendar" }); });
+  if (admin) meItems().forEach(it => { const sc = sched(it); if (!(it.kind === "work" && it.done)) put("m" + it.id, sc.start, sc.time || "", it.alerts, meTitle(it), [PKIND[it.kind], it.place].filter(Boolean).join(" · "), "#calendar"); });
   // 하루 한 번: 오늘 해야 할 일과 오늘의 출장·회의. 아무것도 없으면 띄우지 않는다. 관리자는 내 일정이 모인 뒤에 띄운다.
   if (NT.digest && (!admin || S.me)) { const lines = todayAlert(); if (lines.length) notify("digest", `오늘 일정 · ${fmtDay(tdy)}`, lines.join("\n"), "#home", true); }
   // 곧 시작하는 일정은 맨 마지막에 띄워 가장 아래(가장 눈에 띄는 자리)에 남게 한다
   // 고른 시점마다 한 번씩. 늦게 열었으면 지나간 시점은 건너뛰고 가장 가까운 것 하나만 띄운다.
-  const leads = [...NT.leads].sort((a, b) => a - b);
-  timed.forEach(x => { const m = toMin(x.time) - nowMin; leads.forEach((L, i) => { const lower = i ? leads[i - 1] : -1;
-    if (m <= L && m > lower) notify("soon:" + x.key + x.time + ":" + L, `${ntLeadText(m)}: ${x.title}`, `${x.time} · ${x.sub}`, x.href, true); }); });
+  timed.forEach(x => x.leads.forEach((L, i) => { const lower = i ? x.leads[i - 1] : -1;
+    if (x.m <= L && x.m > lower && !ntSoonSeen("soon:" + x.key + x.time + ":" + L, x.date)) notify("soon:" + x.key + x.time + ":" + L, `${ntLeadText(x.m)}: ${x.title}`, [(x.date !== tdy ? shortD(x.date) + " " : "") + (x.time || "종일"), x.sub].filter(Boolean).join(" · "), x.href, true); }));
+}
+// 며칠 전 알림이 자정을 넘겨 다시 뜨지 않도록, 시점 알림은 그 일정 날짜가 지날 때까지 기억한다.
+function ntSoonSeen(key, date) {
+  try { const map = JSON.parse(localStorage.getItem("nt-soon") || "{}"), tdy = iso(today()); if (map[key]) return true;
+    Object.keys(map).forEach(k => { if (map[k] < tdy) delete map[k]; }); map[key] = date; localStorage.setItem("nt-soon", JSON.stringify(map)); } catch {}
+  return false;
 }
 function ntStart() { clearInterval(NT.timer); NT.timer = setInterval(ntTick, 30000); setTimeout(ntTick, 4000); }
 
