@@ -395,6 +395,17 @@ body{word-break:keep-all;overflow-wrap:anywhere}
 .striprow{display:flex;gap:8px 28px;flex-wrap:wrap;align-items:baseline;padding:12px 20px}
 .striprow + .striprow{border-top:1px solid var(--line)}
 .slabel{font-weight:600;font-size:14px}
+.sbtn{background:none;border:0;padding:2px 6px;margin:-2px -6px;font:inherit;color:inherit;cursor:pointer;border-radius:8px}
+.sbtn:hover{background:var(--hover,rgba(127,127,127,.12))}.sbtn .chev{font-size:11px;color:var(--muted)}
+.todaybox{display:block;padding-top:6px;padding-bottom:6px}
+.tlist{list-style:none;margin:0;padding:0}
+.trow{display:flex;gap:10px;align-items:baseline;width:100%;padding:7px 6px;margin:0 -6px;background:none;border:0;border-radius:8px;font:inherit;color:inherit;text-align:left;text-decoration:none;cursor:pointer}
+a.trow:hover,button.trow:hover{background:var(--hover,rgba(127,127,127,.12))}span.trow{cursor:default}
+.tlist li + li{border-top:1px solid var(--line)}
+.ttime{flex:0 0 96px;color:var(--muted);font-size:13px}
+.trow .dot{flex:0 0 8px;width:8px;height:8px;border-radius:50%;background:var(--c);align-self:center}
+.tmain2{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}.ttitle{font-weight:500;overflow-wrap:anywhere}
+@media (max-width:560px){.ttime{flex-basis:70px}}
 </style>
 </head>
 <body>
@@ -1187,31 +1198,35 @@ function commonOrder() {
   S.links.forEach(l => { const g = l.group || "기타", d = GROUPS.indexOf(g), v = typeof l.gorder === "number" ? l.gorder : (d < 0 ? 900 : 100 + d); if (!(g in pos) || v < pos[g]) pos[g] = v; });
   return Object.keys(pos).sort((a, b) => pos[a] - pos[b] || a.localeCompare(b));
 }
-function gorderOf(g) { const m = S.links.filter(l => (l.group || "기타") === g && typeof l.gorder === "number").map(l => l.gorder); return m.length ? { gorder: Math.min(...m) } : {}; }
+function gorderOf(g) { const m = S.links.filter(l => (l.group || "기타") === g && typeof l.gorder === "number").map(l => l.gorder), o = groupOpenSet(g); return { ...(m.length ? { gorder: Math.min(...m) } : {}), ...(o === null ? {} : { gopen: o }) }; }
+// 묶음을 기본으로 펼쳐 둘지: 관리자가 정했으면 그 값(gopen), 아니면 위에서 두 묶음만 펼친다
+function groupOpenSet(g) { const m = S.links.filter(l => (l.group || "기타") === g && typeof l.gopen === "boolean"); return m.length ? m.some(l => l.gopen) : null; }
+function groupOpen(g, n) { const o = groupOpenSet(g); return o === null ? n < 2 : o; }
 function manageGroups() {
   const box = h("div", { class: "stack", style: "gap:8px" });
   const count = g => S.links.filter(l => (l.group || "기타") === g).length;
   const move = (row, dir) => { const sib = dir < 0 ? row.previousElementSibling : row.nextElementSibling; if (!sib) return; if (dir < 0) box.insertBefore(row, sib); else box.insertBefore(sib, row); };
-  commonOrder().forEach(g => { const row = h("div", { class: "subrow", style: "flex-wrap:nowrap" },
+  commonOrder().forEach((g, n) => { const row = h("div", { class: "subrow grow", style: "flex-wrap:nowrap" },
       h("input", { type: "text", value: g, maxlength: 30, "aria-label": "묶음 이름", "data-old": g }),
       h("span", { class: "small muted num", style: "flex:0 0 40px" }, `${count(g)}개`),
+      h("label", { class: "small", style: "display:inline-flex;gap:4px;align-items:center;white-space:nowrap;flex:0 0 auto" }, h("input", { type: "checkbox", checked: groupOpen(g, n), "aria-label": `${g} 기본으로 펼침` }), "펼침"),
       h("button", { class: "btn", type: "button", "aria-label": `${g} 위로`, onclick: () => move(row, -1) }, "↑"),
       h("button", { class: "btn", type: "button", "aria-label": `${g} 아래로`, onclick: () => move(row, 1) }, "↓"));
     box.append(row); });
   const err = h("span", { class: "err" });
   const form = h("form", { class: "dlg", onsubmit: async ev => {
     ev.preventDefault(); err.textContent = "";
-    const rows = [...box.querySelectorAll("input")].map(i => ({ old: i.getAttribute("data-old"), name: i.value.trim() }));
+    const rows = [...box.querySelectorAll(".grow")].map(r => { const i = r.querySelector("input[type=text]"); return { old: i.getAttribute("data-old"), name: i.value.trim(), open: r.querySelector("input[type=checkbox]").checked }; });
     if (rows.some(r => !r.name)) { err.textContent = "묶음 이름을 비워 둘 수 없습니다."; return; }
     const order = [...new Set(rows.map(r => r.name))];
     busy(form, true);
     const ok = await save("묶음을 저장", async () => { const b = writeBatch(db);
-      S.links.forEach(l => { const r = rows.find(x => x.old === (l.group || "기타")); if (r) b.update(doc(db, "links", l.id), { group: r.name, gorder: order.indexOf(r.name) }); });
+      S.links.forEach(l => { const r = rows.find(x => x.old === (l.group || "기타")); if (r) b.update(doc(db, "links", l.id), { group: r.name, gorder: order.indexOf(r.name), gopen: rows.some(x => x.name === r.name && x.open) }); });
       await b.commit(); });
-    if (ok) closeDlg(); else busy(form, false);
+    if (ok) { S.railOpen = {}; closeDlg(); render(); } else busy(form, false);
   } },
     h("h2", null, "바로가기 묶음 관리"),
-    h("div", { class: "help" }, "이름을 고치면 그 묶음의 바로가기가 모두 새 이름으로 옮겨집니다. 두 묶음에 같은 이름을 적으면 하나로 합쳐집니다. ↑↓로 왼쪽 메뉴에 나오는 순서를 바꿉니다. 새 묶음은 바로가기를 추가하거나 수정할 때 ‘묶음’ 칸에 새 이름을 적으면 생깁니다."),
+    h("div", { class: "help" }, "이름을 고치면 그 묶음의 바로가기가 모두 새 이름으로 옮겨집니다. 두 묶음에 같은 이름을 적으면 하나로 합쳐집니다. ↑↓로 왼쪽 메뉴에 나오는 순서를 바꿉니다. ‘펼침’에 표시한 묶음은 처음부터 펼쳐져 있고, 표시를 지운 묶음은 접힌 채로 나옵니다. 새 묶음은 바로가기를 추가하거나 수정할 때 ‘묶음’ 칸에 새 이름을 적으면 생깁니다."),
     box, dlgFoot(err, "저장"));
   openDlg(form, true);
 }
@@ -1641,10 +1656,11 @@ function greetLine(info) {
 function briefData() {
   const admin = S.isAdmin, n = new Date(), t = today(), tdy = iso(t), week = iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() + 7)), yr = String(t.getFullYear());
   const rooms = S.projects, mine = openTasks(x => admin ? x.assignee === me() : isMine(x));
-  const todayList = [];
-  rooms.forEach(p => (S.events[p.id] || []).forEach(e => { if (e.date === tdy) todayList.push((e.time ? e.time + " " : "") + e.title); }));
-  mine.forEach(x => { if (schedDays(x.t).includes(tdy)) todayList.push(x.t.title); });
-  if (admin) meItems().forEach(it => { if (it.kind !== "work" && schedDays(it).includes(tdy)) todayList.push((sched(it).time ? sched(it).time + " " : "") + meTitle(it)); });
+  const todayList = [];   // 오늘 일정: 눌러서 펼쳐 볼 수 있게 종류·시간·장소까지 담는다
+  rooms.forEach(p => (S.events[p.id] || []).forEach(e => { if (e.date === tdy) todayList.push({ time: e.time ? timeOf(e) : "", kind: "회의", title: e.title, sub: [e.place, p.title].filter(Boolean).join(" · "), p, open: () => eventDialog(p, e) }); }));
+  mine.forEach(x => { if (schedDays(x.t).includes(tdy)) { const sc = sched(x.t); todayList.push({ time: sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : "", kind: x.t._trip ? x.t._label + " 서류" : x.t._me ? "회사 업무" : "할 일", title: x.t.title, sub: x.p === MEP ? "" : x.p.title, p: x.p, href: x.p === MEP ? null : "#p-" + x.p.id + "-todo" }); } });
+  if (admin) meItems().forEach(it => { if (it.kind !== "work" && schedDays(it).includes(tdy)) { const sc = sched(it); todayList.push({ time: sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : "", kind: it.kind === "ext" ? `외부활동 · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.kind === "trip" && it.external ? "외부활동 출장" : PKIND[it.kind], title: meTitle(it), sub: [it.place, sc.end !== sc.start ? `${shortD(sc.start)}~${shortD(sc.end)}` : ""].filter(Boolean).join(" · "), p: MEP, open: () => personalDialog(it) }); } });
+  todayList.sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
   const B = { admin, todayList, todayN: todayList.length,
     lateN: openTasks(x => admin || isMine(x)).filter(x => schedText(x.t).late).length,
     msN: rooms.reduce((a, p) => a + (p.milestones || []).filter(x => !x.done && x.date >= tdy && x.date <= week).length, 0),
@@ -1703,10 +1719,17 @@ function viewHome() {
     : [stat("합계", fmtHM(W.total)), stat("기준", W.std + "h"), h("span", { class: "sitem" }, h("span", { class: "muted" }, "초과/부족"), h("b", { class: "num", style: `color:${W.diff >= 0 ? "var(--ok)" : "var(--crit)"}` }, (W.diff >= 0 ? "+" : "-") + fmtHM(W.diff))),
        stat("오늘 출근", W.inTime || "—"), stat("퇴근", W.outTime || "—")],
     h("a", { class: "small", href: "#work", style: "margin-left:auto" }, "근무시간 입력"));
+  const todayBtn = h("button", { class: "sitem sbtn", type: "button", "aria-expanded": String(!!S.todayOpen), "aria-controls": "today-box", title: "눌러서 오늘 일정 보기", onclick: () => { S.todayOpen = !S.todayOpen; render(); } },
+    h("span", { class: "muted" }, "오늘 일정"), h("b", { class: "num" }, todayN), h("span", { class: "chev", "aria-hidden": "true" }, S.todayOpen ? "▴" : "▾"));
+  const todayBox = !S.todayOpen ? null : h("div", { class: "striprow todaybox", id: "today-box" },
+    !B.todayList.length ? h("span", { class: "muted" }, "오늘은 잡힌 일정이 없습니다.")
+    : h("ul", { class: "tlist" }, B.todayList.map(x => { const body = [h("span", { class: "ttime num" }, x.time || "종일"), h("span", { class: "dot", style: projVars(x.p), "aria-hidden": "true" }),
+        h("span", { class: "tmain2" }, h("span", { class: "ttitle" }, x.title), h("span", { class: "small muted" }, [x.kind, x.sub].filter(Boolean).join(" · ")))];
+      return h("li", null, x.href ? h("a", { class: "trow", href: x.href }, body) : x.open ? h("button", { class: "trow", type: "button", onclick: x.open }, body) : h("span", { class: "trow" }, body)); })));
   const strip = h("div", { class: "strip" },
-    h("div", { class: "striprow" }, stat("오늘 일정", todayN), stat("지연된 할 일", lateN, true), stat("7일 안 마감", msN),
+    h("div", { class: "striprow" }, todayBtn, stat("지연된 할 일", lateN, true), stat("7일 안 마감", msN),
       stat(admin ? "수행 중 과제" : "참여 중 과제", B.activeN, false, admin ? `(올해 수행 과제 수: ${B.yearN})` : null), B.leave ? stat("연가 잔여", dayN(B.leave.annualLeft) + "일") : null),
-    workRow);
+    todayBox, workRow);
   const noProj = rooms.length ? null : h("section", { class: "panel muted" }, admin ? "아직 과제가 없습니다. ‘과제 추가’를 눌러 과제명·연구기간·연구진 메일을 넣어 주세요. 등록한 과제는 왼쪽 메뉴에 나옵니다."
     : `${me()} 계정으로 등록된 과제가 없습니다. 관리자에게 이 메일 주소를 연구진으로 등록해 달라고 요청해 주세요.`);
   // 일의 흐름대로: 전체 파악 → 내가 할 일 → 맡긴 일 (오른쪽에는 일정·근무) → 공지 → 과제 현황 → 도구
@@ -2143,7 +2166,7 @@ function railTools() {   // 과제 화면에서는 보이지 않는다 (과제 �
   if (!common.length && !S.isAdmin) return null;
   return h("div", { class: "railtools" },
     h("div", { class: "navlabel row spread", style: "flex-wrap:nowrap" }, h("span", null, "바로가기"), S.isAdmin ? h("button", { class: "linkbtn", type: "button", onclick: manageLinks }, "관리") : null),
-    order.map((g, n) => { const d = h("details", { open: S.railOpen[g] ?? n < 2 }, h("summary", null, g),
+    order.map((g, n) => { const d = h("details", { open: S.railOpen[g] ?? groupOpen(g, n) }, h("summary", null, g),
         common.filter(l => (l.group || "기타") === g).map(l => { const u = safeUrl(l.url); return h("a", { class: "tool", href: u || "#home", target: u ? "_blank" : null, rel: "noopener", title: host(u) }, tile(l.label, l.url, l.icon), h("span", { class: "nm" }, l.label)); }));
       d.addEventListener("toggle", () => { S.railOpen[g] = d.open; }); return d; }),
     !common.length ? h("div", { class: "small muted", style: "padding:4px 10px" }, "‘관리’에서 바로가기를 넣어 주세요.") : null);
