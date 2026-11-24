@@ -341,6 +341,21 @@ body{word-break:keep-all;overflow-wrap:anywhere}
 .gtag{flex:0 0 auto;font-size:12px;font-weight:600;color:var(--accent);border:1px solid var(--accent);border-radius:99px;padding:0 8px}
 .wxline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:14px}
 .wxcity{width:auto;border:1px solid var(--line);border-radius:99px;padding:2px 8px;background:var(--surface);font-size:13px}
+/* 연구기간: 하나의 축에 과제별 색 막대 */
+.tmonths{font-size:12px;border-bottom:1px solid var(--line);padding-bottom:4px}
+.tmonths span{padding-left:2px}
+.ttrack{position:relative;background-image:linear-gradient(to right,var(--line) 1px,transparent 1px);background-size:calc(100% / 12) 100%;border-right:1px solid var(--line)}
+.tbar{position:absolute;height:12px;border-radius:6px;background:var(--c);min-width:4px}
+.tbar:hover{filter:brightness(1.15)}
+.tbar.cutL{border-top-left-radius:0;border-bottom-left-radius:0}
+.tbar.cutR{border-top-right-radius:0;border-bottom-right-radius:0}
+.tms{position:absolute;width:10px;height:10px;margin-left:-5px;transform:rotate(45deg);background:var(--surface);border:2px solid var(--ink);z-index:1}
+.tms.done{background:var(--ink)}
+.tlegend{display:flex;flex-direction:column;gap:2px}
+.tlrow{display:flex;gap:10px;align-items:flex-start;padding:6px 0;text-decoration:none;color:var(--ink);border-top:1px solid var(--line)}
+.tlrow:first-child{border-top:0}
+.tlrow:hover .tl-title{color:var(--accent);text-decoration:underline}
+.tsw{flex:0 0 22px;height:12px;border-radius:6px;background:var(--c);margin-top:6px}
 </style>
 </head>
 <body>
@@ -439,7 +454,12 @@ function tile(label, url, icon) {
   return el;
 }
 // 과제 아이콘: 관리자가 정한 색(1~5)과 아이콘(글자·이모지 또는 이미지)을 쓰고, 정하지 않았으면 과제명에서 자동으로 만든다
-const projColor = p => p && p.color >= 1 && p.color <= 5 ? `var(--t${p.color})` : tileColor(p ? p.title : "");
+function projColor(p) {
+  if (p && p.color >= 1 && p.color <= 5) return `var(--t${p.color})`;
+  const order = [...S.projects].sort((a, b) => (a.createdAt || "").localeCompare(b.createdAt || "") || a.id.localeCompare(b.id));
+  const k = p && p.id ? order.findIndex(x => x.id === p.id) : -1;
+  return k >= 0 ? `var(--t${k % 5 + 1})` : tileColor(p ? p.title : "");
+}
 function projTile(p) {
   const v = String(p.icon || "").trim(), img = iconSrc(v);
   const el = tile(img ? p.title : (v || p.title), "", img);
@@ -1096,26 +1116,18 @@ function monthPos(d, year, endOfDay) {
   const dim = new Date(year, d.getMonth() + 1, 0).getDate();
   return (d.getMonth() + (d.getDate() - (endOfDay ? 0 : 1)) / dim) / 12;
 }
-function timeline() {
+function timeline() {   // 모든 과제를 하나의 달력 축 위에 색이 다른 막대로 겹쳐 보여 준다
   const y = S.year, t = today();
   const all = [...S.projects].sort((a, b) => (a.start || "9").localeCompare(b.start || "9") || a.title.localeCompare(b.title));
   const inYear = all.filter(p => { const s = D(p.start), e = D(p.end); return s && e && s.getFullYear() <= y && e.getFullYear() >= y; });
   const rest = all.filter(p => !inYear.includes(p));
   const cnt = k => inYear.filter(p => status(p).key === k).length;
-  const rows = inYear.map(p => {
-    const s = D(p.start), e = D(p.end), st = status(p), c = typeColor(p.type);
-    const L = monthPos(s, y), R = monthPos(e, y, true);
-    return h("a", { class: "tl-row", href: "#p-" + p.id },
-      h("div", { class: "tl-label" }, h("div", { class: "tl-title" }, p.title),
-        h("div", { class: "row small", style: "gap:6px;margin-top:2px" }, h("span", { class: "chip type", style: `--c:${c}` }, p.type || "기타"), h("span", { class: "pill " + st.key }, st.label)),
-        h("div", { class: "small muted num" }, period(p))),
-      h("div", { class: "track" },
-        h("div", { class: "bar" + (s.getFullYear() < y ? " cutL" : "") + (e.getFullYear() > y ? " cutR" : ""), style: `left:${(L * 100).toFixed(2)}%;width:${(Math.max(0, R - L) * 100).toFixed(2)}%;--c:${c}` }),
-        (p.milestones || []).map(x => { const d = D(x.date); return d && d.getFullYear() === y ? h("span", { class: "ms" + (x.done ? " done" : ""), style: `left:${((monthPos(d, y) + monthPos(d, y, true)) * 50).toFixed(2)}%`, title: `${fmt(x.date)} ${x.label}` }) : null; }),
-        t.getFullYear() === y ? h("span", { class: "todayline", style: `left:${(monthPos(t, y) * 100).toFixed(2)}%`, title: "오늘" }) : null));
-  });
-  const types = [...new Set(inYear.map(p => p.type || "기타"))].sort();
-  return h("section", { class: "panel stack" },
+  const LANE = 18, H = inYear.length * LANE + 10;
+  const bars = inYear.map((p, n) => { const s = D(p.start), e = D(p.end), L = monthPos(s, y), R = monthPos(e, y, true), top = 6 + n * LANE;
+    return [h("a", { class: "tbar" + (s.getFullYear() < y ? " cutL" : "") + (e.getFullYear() > y ? " cutR" : ""), href: "#p-" + p.id, title: `${p.title} · ${period(p)}`, "aria-label": `${p.title}, ${period(p)}`,
+        style: `left:${(L * 100).toFixed(2)}%;width:${(Math.max(0, R - L) * 100).toFixed(2)}%;top:${top}px;--c:${projColor(p)}` }),
+      (p.milestones || []).map(x => { const d = D(x.date); return d && d.getFullYear() === y ? h("span", { class: "tms" + (x.done ? " done" : ""), style: `left:${((monthPos(d, y) + monthPos(d, y, true)) * 50).toFixed(2)}%;top:${top + 1}px`, title: `${p.title} · ${fmt(x.date)} ${x.label}` }) : null; })]; });
+  return h("section", { class: "panel stack", style: "gap:12px" },
     h("div", { class: "row spread" },
       h("div", null, h("div", { class: "row", style: "gap:8px" }, h("h2", null, "연구기간"), h("span", { class: "only" }, "관리자에게만 보입니다")),
         h("div", { class: "small muted num" }, `${y}년 과제 ${inYear.length}건 · 진행 중 ${cnt("live")} · 예정 ${cnt("soon")} · 종료 ${cnt("done")}`)),
@@ -1123,10 +1135,15 @@ function timeline() {
         h("button", { class: "btn", type: "button", "aria-label": "이전 해", onclick: () => { S.year--; render(); } }, "←"),
         h("strong", { class: "num" }, y + "년"),
         h("button", { class: "btn", type: "button", "aria-label": "다음 해", onclick: () => { S.year++; render(); } }, "→"))),
-    inYear.length ? h("div", { class: "tl" }, h("div", { class: "tl-head" }, h("div"), h("div", { class: "months num" }, Array.from({ length: 12 }, (_, i) => h("span", null, (i + 1) + "월")))), rows)
+    inYear.length ? h("div", null,
+        h("div", { class: "months tmonths num" }, Array.from({ length: 12 }, (_, i) => h("span", null, i + 1))),
+        h("div", { class: "ttrack", style: `height:${H}px` }, bars, t.getFullYear() === y ? h("span", { class: "todayline", style: `left:${(monthPos(t, y) * 100).toFixed(2)}%`, title: "오늘" }) : null))
       : h("div", { class: "muted" }, `${y}년에 걸친 과제가 없습니다.`),
-    inYear.length ? h("div", { class: "legend" }, types.map(tp => h("span", null, h("i", { class: "lg-bar", style: `--c:${typeColor(tp)}` }), tp)),
-      h("span", null, h("i", { class: "lg-ms" }), "마감·주요 일정"), t.getFullYear() === y ? h("span", null, h("i", { class: "lg-today" }), "오늘") : null) : null,
+    inYear.length ? h("div", { class: "tlegend" }, inYear.map(p => { const st = status(p);
+        return h("a", { class: "tlrow", href: "#p-" + p.id }, h("i", { class: "tsw", style: `--c:${projColor(p)}` }),
+          h("span", { style: "min-width:0" }, h("span", { class: "tl-title" }, p.title),
+            h("span", { class: "small muted num", style: "display:block" }, `${p.type || "기타"} · ${st.label} · ${period(p)}`))); }),
+      h("div", { class: "legend", style: "padding-top:4px" }, h("span", null, h("i", { class: "lg-ms" }), "마감·주요 일정"), t.getFullYear() === y ? h("span", null, h("i", { class: "lg-today" }), "오늘") : null)) : null,
     rest.length ? h("div", { class: "small" }, h("span", { class: "muted" }, "다른 해 또는 기간 미정: "), rest.map((p, i) => [i ? ", " : "", h("a", { href: "#p-" + p.id }, `${p.title} (${period(p)})`)])) : null);
 }
 
