@@ -336,6 +336,11 @@ body{word-break:keep-all;overflow-wrap:anywhere}
 .gchip button{border:0;background:transparent;cursor:pointer;color:var(--accent);padding:2px 6px;border-radius:99px}
 .gchip button:hover{background:var(--soft)}
 .gchip button:disabled{color:var(--line);cursor:default;background:transparent}
+.hello{display:flex;flex-direction:column;gap:6px;margin-top:8px;max-width:72ch}
+.greet{display:flex;gap:8px;align-items:baseline}
+.gtag{flex:0 0 auto;font-size:12px;font-weight:600;color:var(--accent);border:1px solid var(--accent);border-radius:99px;padding:0 8px}
+.wxline{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:14px}
+.wxcity{width:auto;border:1px solid var(--line);border-radius:99px;padding:2px 8px;background:var(--surface);font-size:13px}
 </style>
 </head>
 <body>
@@ -1248,6 +1253,68 @@ function linksSection() {
         admin && S.loaded.links && !common.length ? h("button", { class: "btn", type: "button", onclick: ev => seedLinks(ev.currentTarget) }, "기본 목록 넣기") : null)),
     common.length ? grid : h("div", { class: "muted small" }, S.loaded.links ? "등록된 바로가기가 없습니다." : "불러오는 중입니다…"));
 }
+/* ---------- 첫 화면: 인사말과 오늘의 날씨 ---------- */
+const CITIES = [["수원", 37.2636, 127.0286], ["서울", 37.5665, 126.978], ["성남", 37.42, 127.1265], ["용인", 37.2411, 127.1776], ["고양", 37.6584, 126.832], ["화성", 37.1995, 126.8312], ["평택", 36.9921, 127.1129], ["의정부", 37.7381, 127.0338], ["인천", 37.4563, 126.7052], ["대전", 36.3504, 127.3845], ["대구", 35.8714, 128.6014], ["광주", 35.1595, 126.8526], ["부산", 35.1796, 129.0756], ["제주", 33.4996, 126.5312]];
+const WX = { state: "idle", city: "수원", at: 0, d: null };
+try { const c = localStorage.getItem("wx-city"); if (c && CITIES.some(x => x[0] === c)) WX.city = c; } catch {}
+const WCODE = { 0: "맑음", 1: "대체로 맑음", 2: "구름 조금", 3: "흐림", 45: "안개", 48: "안개", 51: "약한 이슬비", 53: "이슬비", 55: "짙은 이슬비", 56: "어는 이슬비", 57: "어는 이슬비", 61: "약한 비", 63: "비", 65: "강한 비", 66: "어는 비", 67: "어는 비", 71: "약한 눈", 73: "눈", 75: "많은 눈", 77: "싸락눈", 80: "약한 소나기", 81: "소나기", 82: "강한 소나기", 85: "눈 소나기", 86: "강한 눈 소나기", 95: "뇌우", 96: "우박을 동반한 뇌우", 99: "우박을 동반한 뇌우" };
+async function loadWeather(force) {
+  if (!force && (WX.state === "loading" || Date.now() - WX.at < 30 * 60000)) return;   // 30분에 한 번만 새로 받는다
+  const c = CITIES.find(x => x[0] === WX.city) || CITIES[0];
+  WX.state = "loading"; WX.at = Date.now();
+  try {
+    const q = new URLSearchParams({ latitude: c[1], longitude: c[2], current: "temperature_2m,apparent_temperature,weather_code,wind_speed_10m", daily: "temperature_2m_max,temperature_2m_min,precipitation_probability_max", timezone: "auto", forecast_days: "1", wind_speed_unit: "ms" });
+    const r = await fetch("https://api.open-meteo.com/v1/forecast?" + q.toString()); if (!r.ok) throw 0;
+    const j = await r.json(), cur = j.current || {}, day = j.daily || {};
+    WX.d = { temp: cur.temperature_2m, feel: cur.apparent_temperature, code: cur.weather_code, wind: cur.wind_speed_10m, max: (day.temperature_2m_max || [])[0], min: (day.temperature_2m_min || [])[0], pop: (day.precipitation_probability_max || [])[0] };
+    if (typeof WX.d.temp !== "number") throw 0;
+    WX.state = "ok";
+  } catch { WX.state = "error"; WX.d = null; }
+  render();
+}
+function weatherLine() {
+  const pick = h("select", { class: "wxcity", "aria-label": "날씨 지역" }, CITIES.map(c => h("option", { value: c[0] }, c[0]))); pick.value = WX.city;
+  pick.addEventListener("change", () => { WX.city = pick.value; try { localStorage.setItem("wx-city", WX.city); } catch {} loadWeather(true); render(); });
+  const d = WX.d, r = v => Math.round(v);
+  return h("div", { class: "wxline" }, pick,
+    WX.state === "ok" && d ? h("span", { class: "num" }, h("b", null, `${WCODE[d.code] || "날씨 정보"} ${r(d.temp)}°`),
+        ` · 체감 ${r(d.feel)}°`, typeof d.min === "number" ? ` · 최저 ${r(d.min)}° / 최고 ${r(d.max)}°` : "", typeof d.pop === "number" ? ` · 강수확률 ${r(d.pop)}%` : "", typeof d.wind === "number" ? ` · 바람 ${d.wind.toFixed(1)}m/s` : "")
+      : h("span", { class: "muted" }, WX.state === "error" ? "날씨를 불러오지 못했습니다." : "날씨를 불러오는 중…"));
+}
+// 인사말: 시간대·요일·오늘 상황·날씨에 맞춰 미리 써 둔 문장 중에서 고른다. 같은 시간대에는 같은 문장이 유지된다.
+function greetLine(info) {
+  const n = new Date(), hr = n.getHours(), dow = n.getDay(), name = S.user ? (S.user.name || "").replace(/\s+/g, " ").trim() : "";
+  const nm = name ? name + " 님" : "선생님";
+  const slot = hr < 5 ? "dawn" : hr < 9 ? "early" : hr < 12 ? "am" : hr < 13 ? "lunch" : hr < 18 ? "pm" : hr < 22 ? "eve" : "night";
+  const pool = {
+    dawn: ["새벽까지 깨어 계시네요. 무리하지는 마세요.", `이 시간에도 일하고 계시다니요. ${nm}, 오늘은 여기까지만 해도 충분합니다.`, "고요한 새벽이네요. 꼭 지금 해야 하는 일만 하고 쉬세요."],
+    early: ["일찍 시작하셨네요. 오늘도 차근차근 가 봐요.", "이른 아침부터 부지런하시네요. 좋은 하루가 될 거예요.", `좋은 아침이에요, ${nm}. 가장 중요한 일 하나부터 잡아 볼까요?`],
+    am: ["좋은 아침이에요. 오늘 할 일을 함께 살펴볼까요?", "오전은 머리가 맑은 시간이에요. 어려운 일을 먼저 해 두면 오후가 편합니다.", `${nm}, 오늘도 잘 부탁드려요.`],
+    lunch: ["점심은 챙기셨나요? 잠깐 쉬었다가 가요.", "한 박자 쉬어 갈 시간이에요. 식사 맛있게 하세요.", "오전 고생하셨어요. 점심 먹고 다시 시작해요."],
+    pm: ["오후도 힘내세요. 남은 일은 하나씩 지워 가면 됩니다.", "나른해질 시간이에요. 물 한 잔 하고 이어 가요.", `${nm}, 오후에도 잘하고 계세요.`],
+    eve: ["저녁까지 수고 많으셨어요. 마무리만 하고 쉬세요.", "하루가 저물어 가네요. 오늘 끝낸 일을 한번 돌아보세요.", "퇴근은 하셨나요? 남은 일은 내일 이어 가도 괜찮습니다."],
+    night: ["늦은 밤에도 열일하시네요. 오늘 할 만큼 하셨어요.", `이 시간까지 고생 많으셨어요. 남은 건 내일의 ${nm}께 맡겨도 됩니다.`, "밤이 깊었어요. 급한 것만 정리하고 푹 쉬세요."],
+  }[slot];
+  let seed = 0; for (const ch of iso(today()) + slot) seed = (seed * 31 + ch.charCodeAt(0)) % 9973;
+  let text = pool[seed % pool.length];
+  if (slot === "am" || slot === "early") { if (dow === 1) text = seed % 2 ? "새로운 한 주가 시작됐어요. 이번 주도 잘 부탁드려요." : text; if (dow === 5) text = seed % 2 ? "금요일이에요. 조금만 더 힘내면 주말입니다." : text; }
+  if ((dow === 0 || dow === 6) && slot !== "dawn" && slot !== "night") text = seed % 2 ? "주말에도 들르셨네요. 쉬엄쉬엄 하세요." : "주말이에요. 꼭 필요한 일만 보고 푹 쉬세요.";
+  const extra = [];
+  if (info) {
+    if (info.late > 0) extra.push(`지연된 할 일이 ${info.late}건 있어요. 가장 오래된 것부터 하나만 끝내 볼까요?`);
+    else if (info.today > 0) extra.push(`오늘 일정이 ${info.today}건 있어요.`);
+    else if (info.projects > 0 && slot !== "night" && slot !== "dawn") extra.push("오늘은 잡힌 일정이 없어요. 밀린 글을 쓰기 좋은 날입니다.");
+  }
+  const d = WX.state === "ok" ? WX.d : null;
+  if (d) { const c = d.code;
+    if ([71, 73, 75, 77, 85, 86].includes(c)) extra.push("눈이 와요. 이동하실 때 조심하세요.");
+    else if ((c >= 51 && c <= 67) || (c >= 80 && c <= 82) || c >= 95 || d.pop >= 60) extra.push("비 소식이 있어요. 우산을 챙기세요.");
+    else if (d.feel <= -5) extra.push("많이 추워요. 따뜻하게 입으세요.");
+    else if (d.feel >= 31) extra.push("많이 더워요. 물을 자주 드세요.");
+  }
+  return h("div", { class: "greet" }, h("span", { class: "gtag" }, "Claude"), h("span", null, [text, ...extra.slice(0, 2)].join(" ")));
+}
+
 function viewHome() {
   const n = new Date(), dateLine = `${n.getMonth() + 1}월 ${n.getDate()}일 (${WEEK[n.getDay()]})`;
   if (!S.user) return h("div", { class: "stack" },
@@ -1258,8 +1325,10 @@ function viewHome() {
     linksSection());
   const admin = S.isAdmin, tdy = iso(today());
   const rooms = [...S.projects].sort((a, b) => a.title.localeCompare(b.title));
-  const head = h("div", { class: "row spread" },
-    h("div", null, h("div", { class: "muted num" }, dateLine), h("h1", null, `안녕하세요, ${S.user.name || me()}님`)),
+  loadWeather();
+  const hello = h("div", { class: "hello" }, greetLine(null), weatherLine());
+  const head = h("div", { class: "row spread", style: "align-items:flex-start" },
+    h("div", { style: "min-width:0" }, h("div", { class: "muted num" }, dateLine), h("h1", null, `안녕하세요, ${S.user.name || me()}님`), hello),
     admin ? h("div", { class: "row", style: "gap:8px" },
       h("button", { class: "btn", type: "button", onclick: manageTypes }, "과제 유형 관리"),
       h("button", { class: "btn primary", type: "button", onclick: () => editProject(null) }, "과제 추가")) : null);
@@ -1270,6 +1339,7 @@ function viewHome() {
   const week = iso(new Date(n.getFullYear(), n.getMonth(), n.getDate() + 7));
   const msN = rooms.reduce((a, p) => a + (p.milestones || []).filter(x => !x.done && x.date >= tdy && x.date <= week).length, 0);
   const stat = (label, v, warn) => h("span", { class: "sitem" }, h("span", { class: "muted" }, label), h("b", { class: "num" + (warn && v ? " late" : "") }, v));
+  hello.replaceChildren(greetLine({ late: lateN, today: todayN, projects: rooms.length }), weatherLine());
   const strip = h("div", { class: "strip" }, stat("오늘 일정", todayN), stat("지연된 할 일", lateN, true), stat("7일 안 마감", msN), stat(admin ? "과제" : "참여 과제", rooms.length));
   const plist = h("section", { class: "panel stack", style: "gap:4px" }, h("div", { style: "padding-bottom:6px" }, h("h2", null, admin ? "과제" : "내 과제")),
     rooms.length ? h("div", { class: "plist" }, rooms.map(r => { const c = (S.todos[r.id] || []).filter(t => !t.done && (admin || isMine(t))).length;
