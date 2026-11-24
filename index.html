@@ -567,6 +567,28 @@ function refEditor(refs) {
     if (raw.some(r => !safeUrl(r.url))) return null; return cleanRefs(raw); };
   return { node, read };
 }
+// 반복 일정: 원본 한 건을 저장하고, 화면에 그릴 때 날짜별로 펼친다. 펼친 항목은 _base(원본)와 _n(몇 번째)을 가진다.
+const REPEAT = { none: "반복 안 함", daily: "매일", weekly: "매주", biweekly: "2주마다", monthly: "매월" };
+function repeatDates(start, repeat, until) {
+  const s0 = D(start); if (!s0 || !repeat || repeat === "none" || !REPEAT[repeat]) return [start];
+  const end = D(until) || new Date(s0.getFullYear() + 1, s0.getMonth(), s0.getDate()), out = [];
+  for (let k = 0; out.length < 400 && k < 1500; k++) {
+    let d;
+    if (repeat === "monthly") { d = new Date(s0.getFullYear(), s0.getMonth() + k, s0.getDate()); if (d.getDate() !== s0.getDate()) continue; }   // 31일처럼 그 달에 없는 날은 건너뛴다
+    else d = new Date(s0.getFullYear(), s0.getMonth(), s0.getDate() + k * (repeat === "daily" ? 1 : repeat === "weekly" ? 7 : 14));
+    if (d > end) break; out.push(iso(d));
+  }
+  return out.length ? out : [start];
+}
+const expandEvent = e => { const ds = repeatDates(e.date, e.repeat, e.until); return ds.length < 2 && !(e.repeat && e.repeat !== "none") ? [e] : ds.map((dt, n) => ({ ...e, date: dt, _base: e, _n: n })); };
+function expandMe(it) {
+  if (!it.repeat || it.repeat === "none" || !it.start) return [it];
+  const span = days(D(it.start), D(it.end || it.start));
+  return repeatDates(it.start, it.repeat, it.until).map((dt, n) => ({ ...it, start: dt, end: addDays(dt, span), _base: it, _n: n }));
+}
+// 목록(일정 요약, 전체 마감)에는 반복 일정의 다음 한 번만 보여 준다
+function nextOnly(list, dateOf, tdy) { const seen = new Set(); return list.filter(x => { if (!x._base) return true; if (dateOf(x) < tdy || seen.has(x.id)) return false; seen.add(x.id); return true; }); }
+const repeatNote = x => { const b = x && (x._base || x); return b && b.repeat && b.repeat !== "none" && REPEAT[b.repeat] ? `${REPEAT[b.repeat]} 반복${b.until ? ` · ${shortD(b.until)}까지` : ""}` : ""; };
 const sortEvents = list => [...(list || [])].sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
 const isAdminEmail = e => (ADMIN_EMAILS || []).map(normEmail).includes(e);
 const whoName = (p, email) => !email ? "전체" : ((p.members || []).find(m => normEmail(m.email) === email) || {}).name || (isAdminEmail(email) ? "관리자" : email);
@@ -648,7 +670,7 @@ function watchProjects() {
     const ids = new Set(S.projects.map(p => p.id));
     for (const id of Object.keys(subs.per)) if (!ids.has(id)) { subs.per[id].forEach(u => u()); delete subs.per[id]; delete S.todos[id]; delete S.events[id]; }
     for (const id of ids) if (!subs.per[id]) subs.per[id] = ["todos", "events"].map(key =>
-      onSnapshot(collection(db, "projects", id, key), s => { S[key][id] = s.docs.map(d => ({ ...d.data(), id: d.id })); render(); }, onDenied));
+      onSnapshot(collection(db, "projects", id, key), s => { const rows = s.docs.map(d => ({ ...d.data(), id: d.id })); S[key][id] = key === "events" ? rows.flatMap(expandEvent) : rows; render(); }, onDenied));
     // 참여 과제가 하나뿐이면 첫 화면을 건너뛰고 그 과제로 바로 이동
     if (!S.isAdmin && !S.redirected && S.projects.length === 1 && !/^#p-/.test(location.hash)) { S.redirected = true; location.hash = "p-" + S.projects[0].id; return; }
     S.redirected = true; render();
@@ -773,7 +795,7 @@ function editProject(p) {
       const ok = await save("과제를 삭제", async () => {
         const b = writeBatch(db);
         (S.todos[p.id] || []).forEach(t => b.delete(doc(db, "projects", p.id, "todos", t.id)));
-        (S.events[p.id] || []).forEach(e => b.delete(doc(db, "projects", p.id, "events", e.id)));
+        [...new Set((S.events[p.id] || []).map(e => e.id))].forEach(eid => b.delete(doc(db, "projects", p.id, "events", eid)));
         b.delete(doc(db, "projects", p.id)); await b.commit();
       });
       if (ok) { closeDlg(); location.hash = "home"; toast("과제를 삭제했습니다."); }
@@ -1001,9 +1023,9 @@ function agenda() {
   for (const p of S.projects) {
     (p.milestones || []).forEach(m => { if (!m.done && m.date) items.push({ kind: "마감", date: m.date, title: m.label, p }); });
     (S.todos[p.id] || []).forEach(x => { if (!x.done && (S.isAdmin || isMine(x))) { const sc = sched(x), stx = schedText(x); items.push({ kind: "할 일", date: sc.start && sc.start < tdy && !stx.late ? tdy : sc.start, time: sc.time, late: stx.late, title: x.title, p, todo: x, stx }); } });
-    (S.events[p.id] || []).forEach(e => { if (e.date >= tdy) items.push({ kind: "회의", date: e.date, time: e.time || "", title: e.title, p, ev: e }); });
+    nextOnly(S.events[p.id] || [], e => e.date, tdy).forEach(e => { if (e.date >= tdy) items.push({ kind: "회의", date: e.date, time: e.time || "", title: e.title, p, ev: e }); });
   }
-  if (S.isAdmin) meItems().forEach(it => { const sc = sched(it), stx = schedText(it);
+  if (S.isAdmin) nextOnly(meItems(), it => sched(it).end, tdy).forEach(it => { const sc = sched(it), stx = schedText(it);
     if (it.kind === "work") { if (!it.done) { const t0 = meTasks().find(x => x.id === it.id); items.push({ kind: "할 일", date: sc.start && sc.start < tdy && !stx.late ? tdy : sc.start, time: sc.time, late: stx.late, title: it.title, p: MEP, todo: t0, stx }); } }
     else if (sc.start && sc.end >= tdy) items.push({ kind: "내 일정", date: sc.start < tdy ? tdy : sc.start, time: sc.time, title: meTitle(it), p: MEP, me: it }); });
   if (S.isAdmin) meTasks().filter(t0 => t0._trip && !t0.done).forEach(t0 => { const stx = schedText(t0); items.push({ kind: "할 일", date: t0.start, time: "", late: stx.late, title: t0.title, p: MEP, todo: t0, stx }); });
@@ -1032,11 +1054,14 @@ function agenda() {
 
 /* ---------- 달력 ---------- */
 function eventDialog(p, ev, date) {
+  const occ = ev;   // 눌러서 연 그날의 일정 (반복이면 그 회차)
+  if (ev && ev._base && S.isAdmin) ev = ev._base;   // 수정은 반복 전체(원본)에 적용
   if (ev && !S.isAdmin) {
     openDlg(h("div", { class: "dlg" }, h("h2", null, ev.title),
       h("ul", { class: "list" },
         h("li", null, h("span", { class: "when" }, "날짜"), h("span", null, fmtDay(ev.date))),
         timeOf(ev) ? h("li", null, h("span", { class: "when" }, "시간"), h("span", { class: "num" }, timeOf(ev))) : null,
+        repeatNote(ev) ? h("li", null, h("span", { class: "when" }, "반복"), h("span", null, repeatNote(ev))) : null,
         ev.place ? h("li", null, h("span", { class: "when" }, "장소"), h("span", null, ev.place)) : null,
         ev.memo ? h("li", null, h("span", { class: "when" }, "메모"), h("span", { style: "white-space:pre-wrap" }, ev.memo)) : null,
         h("li", null, h("span", { class: "when" }, "자료"), h("span", { style: "flex:1;min-width:0" }, refList(ev.refs, { p, kind: "events", item: ev })))),
@@ -1050,19 +1075,27 @@ function eventDialog(p, ev, date) {
   const place = h("input", { type: "text", value: ev.place || "", maxlength: 100, placeholder: "예: 연구원 3층 회의실, 온라인(Zoom)" });
   const memo = h("textarea", { maxlength: 600 }); memo.value = ev.memo || "";
   const refs = refEditor(ev.refs);
+  const rep = h("select", null, Object.entries(REPEAT).map(([v, l]) => h("option", { value: v }, l))); rep.value = REPEAT[ev.repeat] ? ev.repeat : "none";
+  const until = h("input", { type: "date", value: ev.until || "" });
+  const fUntil = field("반복 종료일", "e-until", until);
+  const showRep = () => { fUntil.hidden = rep.value === "none"; if (rep.value !== "none" && !until.value && d.value) { const s0 = D(d.value); until.value = iso(new Date(s0.getFullYear(), s0.getMonth() + 3, s0.getDate())); } };
+  rep.addEventListener("change", showRep); showRep();
   const err = h("span", { class: "err" });
   const form = h("form", { class: "dlg", onsubmit: async e => {
     e.preventDefault();
     if (!title.value.trim() || !d.value) { err.textContent = "일정 이름과 날짜를 입력해 주세요."; return; }
     const refData = refs.read(); if (!refData) { err.textContent = "참고 자료 링크는 https:// 로 시작해야 합니다."; return; }
     if (t1.value && t2.value && t2.value < t1.value) { err.textContent = "끝나는 시간이 시작 시간보다 빠릅니다."; return; }
-    const item = { title: title.value.trim(), date: d.value, time: t1.value, endTime: t1.value ? t2.value : "", place: place.value.trim(), memo: memo.value.trim(), refs: refData, gcalId: ev.gcalId || "", gcalSyncedAt: ev.gcalSyncedAt || "", updatedAt: new Date().toISOString() };
+    if (rep.value !== "none" && (!until.value || until.value < d.value)) { err.textContent = "반복 종료일을 시작 날짜와 같거나 그 뒤로 정해 주세요."; return; }
+    const item = { title: title.value.trim(), date: d.value, time: t1.value, endTime: t1.value ? t2.value : "", repeat: rep.value, until: rep.value === "none" ? "" : until.value, place: place.value.trim(), memo: memo.value.trim(), refs: refData, gcalId: ev.gcalId || "", gcalSyncedAt: ev.gcalSyncedAt || "", updatedAt: new Date().toISOString() };
     busy(form, true);
     if (await save("일정을 저장", () => setDoc(doc(db, "projects", p.id, "events", ev.id || "e" + newId()), item))) { const dd = D(item.date); S.cal = { y: dd.getFullYear(), m: dd.getMonth() }; closeDlg(); render(); } else busy(form, false);
   } },
     h("h2", null, isNew ? "일정 추가" : "일정 수정"),
     field("일정 이름", "e-title", title),
-    h("div", { class: "row", style: "align-items:flex-start" }, field("날짜", "e-date", d), field("시작 시간 (선택)", "e-t1", t1), field("끝나는 시간 (선택)", "e-t2", t2)),
+    h("div", { class: "row", style: "align-items:flex-start" }, field(isNew ? "날짜" : ev.repeat && ev.repeat !== "none" ? "첫 날짜" : "날짜", "e-date", d), field("시작 시간 (선택)", "e-t1", t1), field("끝나는 시간 (선택)", "e-t2", t2)),
+    h("div", { class: "row", style: "align-items:flex-start" }, field("반복", "e-rep", rep), fUntil),
+    !isNew && ev.repeat && ev.repeat !== "none" ? h("div", { class: "help" }, "반복 일정입니다. 여기서 고치거나 삭제하면 모든 회차에 함께 적용됩니다.") : null,
     field("장소 (선택)", "e-place", place), field("메모 (선택)", "e-memo", memo), refs.node,
     dlgFoot(err, "저장", isNew ? null : async () => {
       if (!await save("일정을 삭제", () => deleteDoc(doc(db, "projects", p.id, "events", ev.id)))) return;
@@ -1109,7 +1142,7 @@ function calendarView(p) {
     h("section", { class: "panel stack", style: "gap:6px" }, h("h2", null, `${m + 1}월 회의·일정 ${monthEvents.length}건`),
       monthEvents.length ? h("ul", { class: "list" }, monthEvents.map(e => h("li", null, h("span", { class: "when wide num" }, fmtDay(e.date)),
         h("span", { style: "flex:1;min-width:0" }, h("b", { style: "font-weight:600" }, e.title),
-          h("span", { class: "small muted", style: "display:block" }, [timeOf(e), e.place].filter(Boolean).join(" · ")),
+          h("span", { class: "small muted", style: "display:block" }, [timeOf(e), e.place, repeatNote(e)].filter(Boolean).join(" · ")),
           e.memo ? h("span", { class: "small", style: "display:block;white-space:pre-wrap" }, e.memo) : null, refList(e.refs, { p, kind: "events", item: e })),
         gAddLink(p, e), admin ? h("button", { class: "btn quiet small", type: "button", onclick: () => eventDialog(p, e) }, "수정") : null)))
         : h("div", { class: "muted small" }, admin ? "이 달에 등록된 일정이 없습니다. 날짜 칸의 +를 눌러 회의 일정을 넣어 주세요." : "이 달에 등록된 일정이 없습니다.")));
@@ -1262,10 +1295,11 @@ function tripSteps(it) {
     : [["request", "출장신청서 제출", before, "before"], ["report", "출장복명서 제출", addDays(sc.end, rd), "after"]];
   return list.map(([key, label, due, phase]) => ({ key, label, due, phase, done: !!st[key] }));
 }
-const meById = id => meItems().find(x => x.id === String(id).split(":")[0]) || null;
+const meById = id => meRaw().find(x => x.id === String(id).split(":")[0]) || null;
 const MEP = { id: "_me", title: "개인·회사", members: [], color: "#5d6d7e" };   // 과제가 아닌 항목을 담는 가상의 묶음
 const isLeave = k => k === "annual" || k === "sick";
-const meItems = () => (S.me && S.me.items) || [];
+const meRaw = () => (S.me && S.me.items) || [];          // 저장된 그대로
+const meItems = () => meRaw().flatMap(expandMe);         // 화면용: 반복 일정을 날짜별로 펼친 것
 const meLeave = () => (S.me && S.me.leave) || {};
 const meVars = it => `--c:${PCOLOR[it.kind] || PCOLOR.etc};--ci:#ffffff`;
 const meTitle = it => isLeave(it.kind) ? (it.title && it.title !== PKIND[it.kind] ? `${PKIND[it.kind]} · ${it.title}` : PKIND[it.kind]) : it.title;
@@ -1276,12 +1310,12 @@ function meTasks() {   // 할 일 목록에 넣을 것: 회사 업무 + 출장 �
   return out;
 }
 function saveMe(patch, what) {
-  const next = { items: meItems(), leave: meLeave(), ...patch, updatedAt: new Date().toISOString() };
+  const next = { items: meRaw(), leave: meLeave(), ...patch, updatedAt: new Date().toISOString() };
   return save(what || "저장", () => setDoc(doc(db, "worktime", "personal"), next));
 }
 function toggleMe(id, on) {
   const [base, step] = String(id).split(":");
-  return saveMe({ items: meItems().map(x => x.id !== base ? x : step ? { ...x, steps: { ...(x.steps || {}), [step]: on } } : { ...x, done: on, doneAt: on ? new Date().toISOString() : "" }) }, "할 일을 바꾸");
+  return saveMe({ items: meRaw().map(x => x.id !== base ? x : step ? { ...x, steps: { ...(x.steps || {}), [step]: on } } : { ...x, done: on, doneAt: on ? new Date().toISOString() : "" }) }, "할 일을 바꾸");
 }
 function weekdaysIn(s, e) { let d = D(s), n = 0; const end = D(e || s); if (!d || !end) return 0; for (let k = 0; d <= end && k < 400; k++) { if (d.getDay() !== 0 && d.getDay() !== 6) n++; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1); } return n; }
 function leaveStats() {
@@ -1292,6 +1326,7 @@ function leaveStats() {
 }
 const dayN = v => (Math.round(v * 100) / 100).toString();
 function personalDialog(it, preset) {
+  if (it && it._base) it = it._base;   // 반복 일정은 원본(전체)을 고친다
   const isNew = !it; it = it || { kind: (preset && preset.kind) || "work", when: "day", start: (preset && preset.date) || iso(today()) };
   const s0 = sched(it);
   const kind = h("select", null, Object.entries(PKIND).map(([v, l]) => h("option", { value: v }, l))); kind.value = it.kind || "work";
@@ -1304,6 +1339,10 @@ function personalDialog(it, preset) {
   const memo = h("textarea", { maxlength: 600 }); memo.value = it.memo || "";
   const fTitle = field("제목", "m-title", title), fStart = field("날짜", "m-start", start), fEnd = field("끝나는 날", "m-end", end), fTime = field("시작 시간", "m-time", time), fEtime = field("끝나는 시간 (선택)", "m-etime", etime);
   const fDays = field("사용 일수 (반차는 0.5)", "m-days", daysIn), fPlace = field("장소 (선택)", "m-place", place);
+  const mrep = h("select", null, Object.entries(REPEAT).map(([v, l]) => h("option", { value: v }, l))); mrep.value = REPEAT[it.repeat] ? it.repeat : "none";
+  const muntil = h("input", { type: "date", value: it.until || "" });
+  const fRep = field("반복", "m-rep", mrep), fUntil = field("반복 종료일", "m-until", muntil);
+  const canRepeat = k => k === "event" || k === "etc";   // 행사·기타만 반복 (업무·출장·휴가는 회차마다 처리할 것이 달라 제외)
   const ext = h("select", null, h("option", { value: "0" }, "아니요"), h("option", { value: "1" }, "예 (외부활동)")); ext.value = it.external ? "1" : "0";
   const rdays = h("input", { type: "number", min: 0, max: 60, step: 1, value: it.reportDays >= 0 ? it.reportDays : 7 });
   const mode = h("select", null, Object.entries(EXTMODE).map(([v, l]) => h("option", { value: v }, l))); mode.value = it.mode === "online" ? "online" : "paper";
@@ -1323,11 +1362,13 @@ function personalDialog(it, preset) {
     if (when.value === "none" && k !== "work" && k !== "etc") when.value = "day";
     fStart.hidden = when.value === "none"; fEnd.hidden = when.value !== "range"; fTime.hidden = fEtime.hidden = when.value !== "time";
     fStart.querySelector("label").textContent = when.value === "range" ? "시작하는 날" : "날짜";
+    fRep.hidden = !canRepeat(k) || when.value === "none"; fUntil.hidden = fRep.hidden || mrep.value === "none";
+    if (!fUntil.hidden && !muntil.value && start.value) { const s1 = D(start.value); muntil.value = iso(new Date(s1.getFullYear(), s1.getMonth() + 3, s1.getDate())); }
     fDays.hidden = !lv; fPlace.hidden = k !== "event" && k !== "etc" && k !== "trip"; fExt.hidden = k !== "trip"; fRd.hidden = !(k === "trip" && ext.value !== "1"); fMode.hidden = k !== "ext";
     fPlace.querySelector("label").textContent = k === "trip" ? "출장 장소" : "장소 (선택)";
     fTitle.querySelector("label").textContent = lv ? "메모할 이름 (선택 · 예: 오후 반차)" : k === "work" ? "업무" : k === "trip" ? "출장 목적" : k === "ext" ? "활동 내용" : "제목";
     title.placeholder = k === "work" ? "예: 연간 사업계획서 제출" : k === "event" ? "예: 교육과정 포럼" : k === "trip" ? "예: ○○학회 발표, 학교 방문 면담" : k === "ext" ? "예: ○○ 연구 서면 자문, ○○위원회 온라인 회의" : ""; autoDays(); drawSteps(); };
-  [kind, when, start, end, ext, rdays, mode].forEach(el => el.addEventListener("change", show)); show();
+  [kind, when, start, end, ext, rdays, mode, mrep].forEach(el => el.addEventListener("change", show)); show();
   const err = h("span", { class: "err" });
   const form = h("form", { class: "dlg", onsubmit: async ev => {
     ev.preventDefault(); err.textContent = "";
@@ -1337,21 +1378,25 @@ function personalDialog(it, preset) {
     if (w === "range" && (!end.value || end.value < start.value)) { err.textContent = "끝나는 날을 시작하는 날과 같거나 그 뒤로 정해 주세요."; return; }
     if (w === "time" && !time.value) { err.textContent = "시작 시간을 입력해 주세요."; return; }
     if (w === "time" && etime.value && etime.value < time.value) { err.textContent = "끝나는 시간이 시작 시간보다 빠릅니다."; return; }
+    const rp = canRepeat(k) && w !== "none" ? mrep.value : "none";
+    if (rp !== "none" && (!muntil.value || muntil.value < start.value)) { err.textContent = "반복 종료일을 시작 날짜와 같거나 그 뒤로 정해 주세요."; return; }
     const dn = lv ? parseFloat(daysIn.value) : 0;
     if (lv && !(dn >= 0)) { err.textContent = "사용 일수를 숫자로 입력해 주세요."; return; }
     const sd = w === "none" ? "" : start.value;
     const item = { id: it.id || "m" + newId(), kind: k, title: title.value.trim() || (lv ? PKIND[k] : ""), when: w, start: sd, end: w === "range" ? end.value : sd, time: w === "time" ? time.value : "", endTime: w === "time" ? etime.value : "",
+      repeat: rp, until: rp === "none" ? "" : muntil.value,
       place: place.value.trim(), memo: memo.value.trim(), days: lv ? dn : 0, done: !!it.done, createdAt: it.createdAt || new Date().toISOString(),
       ...(k === "trip" ? { external: ext.value === "1", reportDays: Math.max(0, parseInt(rdays.value) || 0), steps: stepState } : k === "ext" ? { mode: mode.value, steps: stepState } : {}) };
     busy(form, true);
-    if (await saveMe({ items: meItems().filter(x => x.id !== item.id).concat(item) }, "일정을 저장")) closeDlg(); else busy(form, false);
+    if (await saveMe({ items: meRaw().filter(x => x.id !== item.id).concat(item) }, "일정을 저장")) closeDlg(); else busy(form, false);
   } },
     h("h2", null, isNew ? "내 일정 추가" : "내 일정 수정"),
     h("div", { class: "small muted" }, "과제에 속하지 않는 회사 업무, 행사, 연가·병가입니다. 관리자에게만 보입니다."),
     h("div", { class: "row", style: "align-items:flex-start" }, field("종류", "m-kind", kind), field("일정", "m-when", when)),
-    fTitle, h("div", { class: "row", style: "align-items:flex-start" }, fStart, fEnd, fTime, fEtime), fDays, fPlace,
+    fTitle, h("div", { class: "row", style: "align-items:flex-start" }, fStart, fEnd, fTime, fEtime),
+    h("div", { class: "row", style: "align-items:flex-start" }, fRep, fUntil), fDays, fPlace,
     h("div", { class: "row", style: "align-items:flex-start" }, fMode, fExt, fRd), stepBox, field("메모 (선택)", "m-memo", memo),
-    dlgFoot(err, "저장", isNew ? null : async () => { if (await ask("이 일정을 지울까요?", "지우기") && await saveMe({ items: meItems().filter(x => x.id !== it.id) }, "일정을 지우")) closeDlg(); }));
+    dlgFoot(err, "저장", isNew ? null : async () => { if (await ask("이 일정을 지울까요?", "지우기") && await saveMe({ items: meRaw().filter(x => x.id !== it.id) }, "일정을 지우")) closeDlg(); }));
   openDlg(form);
 }
 function leaveSettings() {
@@ -1444,10 +1489,10 @@ function dayItems(key) {   // 그날의 회의·마감·할 일
 function upcomingCard() {
   const t = today(), tdy = iso(t), items = [];
   for (const p of S.projects) {
-    (S.events[p.id] || []).forEach(e => { if (e.date >= tdy) items.push({ date: e.date, time: e.time || "", title: e.title, p, e, kind: "회의" }); });
+    nextOnly(S.events[p.id] || [], e => e.date, tdy).forEach(e => { if (e.date >= tdy) items.push({ date: e.date, time: e.time || "", title: e.title, p, e, kind: "회의" + (repeatNote(e) ? ` · ${REPEAT[(e._base || e).repeat]}` : "") }); });
     (p.milestones || []).forEach(x => { if (!x.done && x.date >= tdy) items.push({ date: x.date, time: "", title: x.label, p, kind: "마감" }); });
   }
-  if (S.isAdmin) meItems().forEach(it => { const sc = sched(it); if (it.kind === "work" || !sc.start || sc.end < tdy) return;
+  if (S.isAdmin) nextOnly(meItems(), it => sched(it).end, tdy).forEach(it => { const sc = sched(it); if (it.kind === "work" || !sc.start || sc.end < tdy) return;
     items.push({ date: sc.start < tdy ? tdy : sc.start, time: sc.time, title: meTitle(it), p: MEP, me: it, kind: (it.kind === "ext" ? `외부활동 · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.kind === "trip" && it.external ? "외부활동 출장" : PKIND[it.kind]) + (it.place ? ` · ${it.place}` : "") + (sc.end !== sc.start ? ` · ${shortD(sc.end)}까지` : "") }); });
   items.sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const when = i => { const d = D(i.date), n = days(t, d); return (n === 0 ? "오늘" : n < 7 ? WEEK[d.getDay()] : shortD(i.date)) + " " + (i.time || "종일"); };
@@ -1779,6 +1824,8 @@ function gBody(p, e) {
   const b = { summary: `[${p.title}] ${e.title}`, location: e.place || "", description: eventDetails(e) };
   if (e.time) { b.start = { dateTime: `${e.date}T${e.time}:00`, timeZone: TZ }; b.end = { dateTime: `${e.date}T${e.endTime || plusHour(e.time)}:00`, timeZone: TZ }; }
   else { b.start = { date: e.date }; b.end = { date: plusDay(e.date) }; }
+  const rule = { daily: "FREQ=DAILY", weekly: "FREQ=WEEKLY", biweekly: "FREQ=WEEKLY;INTERVAL=2", monthly: "FREQ=MONTHLY" }[e.repeat];
+  if (rule && e.until) b.recurrence = [`RRULE:${rule};UNTIL=${e.until.replace(/-/g, "")}${e.time ? "T145959Z" : ""}`];   // 종료일의 끝(한국 시간 23:59 = UTC 14:59)까지
   return JSON.stringify(b);
 }
 // 사이트의 회의·일정을 내 Google 캘린더로 보낸다. 보낸 일정의 Google 쪽 id를 적어 두어 같은 일정이 두 번 생기지 않게 한다.
@@ -1787,8 +1834,10 @@ async function gSync() {
   const t = today(), cutoff = iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() - 30));
   let made = 0, upd = 0;
   try {
-    for (const p of S.projects) for (const e of (S.events[p.id] || [])) {
-      if (e.date < cutoff) continue;
+    for (const p of S.projects) for (const occ of (S.events[p.id] || [])) {
+      if (occ._base && occ._n > 0) continue;   // 반복 일정은 원본 한 건만 보낸다
+      const e = occ._base || occ;
+      if ((e.repeat && e.repeat !== "none" ? (e.until || e.date) : e.date) < cutoff) continue;
       const ref = doc(db, "projects", p.id, "events", e.id), now = new Date().toISOString();
       if (e.gcalId && (e.updatedAt || "") <= (e.gcalSyncedAt || "")) continue;
       let j = e.gcalId ? await gFetch("events/" + encodeURIComponent(e.gcalId), { method: "PATCH", body: gBody(p, e) }) : null;
@@ -1818,7 +1867,7 @@ function allCalendar(embed) {
   }
   if (admin) meItems().forEach(it => { if (it.kind === "work" && it.done) return; const sc = sched(it), ds = schedDays(it);
     ds.forEach(d => items.push({ kind: "me", date: d, time: sc.time, title: meTitle(it), p: MEP, me: it, span: ds.length > 1 ? schedText(it).text : "" })); });
-  if (connected) G.items.filter(g => !sent.has(g.id)).forEach(g => items.push({ kind: "g", date: g.date, time: g.time, title: g.title, g }));
+  if (connected) G.items.filter(g => !sent.has(g.id) && !sent.has(String(g.id).split("_")[0])).forEach(g => items.push({ kind: "g", date: g.date, time: g.time, title: g.title, g }));
   const inMonth = items.filter(i => (i.date || "").startsWith(monthKey)).sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const seenTd = new Set();
   const listItems = inMonth.filter(i => { if ((i.kind !== "td" && i.kind !== "me") || !i.span) return true; const k = i.p.id + "|" + i.title + "|" + i.span; if (seenTd.has(k)) return false; seenTd.add(k); return true; });
