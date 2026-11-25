@@ -764,6 +764,7 @@ function editProject(p, presetSpace) {
     fType.hidden = sp !== "project"; fStart.querySelector("label").textContent = sp === "work" ? "시작일 (선택)" : "연구 시작일"; fEnd.querySelector("label").textContent = sp === "work" ? "종료일 (선택)" : "연구 종료일"; };
   space.addEventListener("change", spaceShow); spaceShow();
   const notice = h("textarea", { maxlength: 1500 }); notice.value = p.notice || "";
+  const gInv = h("input", { type: "checkbox", checked: !!p.gInvite, id: "f-ginvite" });
   const icon = h("input", { type: "text", value: p.icon || "", maxlength: 300, placeholder: "예: 📘, 공, A1 또는 icons/co.png" });
   let colorVal = typeof p.color === "string" ? normHex(p.color) : (LEGACY[p.color] || "");   // "" = 자동
   const cPick = h("input", { type: "color", "aria-label": "색 고르기", class: "cpick", value: colorVal || "#0b5f73" });
@@ -829,7 +830,7 @@ function editProject(p, presetSpace) {
     if (rawLinks.some(l => !safeUrl(l.url))) { err.textContent = "도구 주소는 https:// 로 시작해야 합니다."; return; }
     const id = p.id || "p" + newId();
     const data = {
-      title: title.value.trim(), space: space.value, type: space.value === "project" ? type.value : "", start: start.value, end: end.value, notice: notice.value.trim(),
+      gInvite: gInv.checked, title: title.value.trim(), space: space.value, type: space.value === "project" ? type.value : "", start: start.value, end: end.value, notice: notice.value.trim(),
       links: rawLinks.map(l => ({ group: l.group || "기타", label: l.label, url: safeUrl(l.url), icon: iconSrc(l.icon) })),
       members, memberEmails: [...new Set(members.map(m => m.email).filter(Boolean))],   // 이 목록에 있는 메일만 과제를 열 수 있다 (보안 규칙이 확인)
       milestones: rows(sBox, ["date", "label", "done"]).filter(m => m.label).sort((a, b) => (a.date || "9").localeCompare(b.date || "9")),
@@ -848,7 +849,8 @@ function editProject(p, presetSpace) {
     h("div", { class: "help" }, "아이콘을 비워 두면 과제명 첫 글자가 들어갑니다. 글자나 이모지 1~2자를 적거나, 이미지를 쓰려면 주소(https://…) 또는 GitHub 저장소에 올린 파일 경로(icons/파일이름.png)를 적습니다. 색은 달력의 점과 연구기간 막대에도 쓰입니다."),
     field("고정 안내문 (선택 · 과제 화면에 항상 보이는 글. 날짜별 공지는 과제 화면의 ‘공지 추가’로 올립니다)", "f-notice", notice),
     h("div", { class: "stack", style: "gap:8px" }, h("span", { class: "flabel" }, "공동연구진"), mBox,
-      h("div", null, h("button", { class: "btn", type: "button", onclick: () => addMember({}) }, "연구진 추가"))),
+      h("div", null, h("button", { class: "btn", type: "button", onclick: () => addMember({}) }, "연구진 추가")),
+      h("label", { class: "row small", style: "gap:8px;flex-wrap:nowrap;align-items:flex-start" }, gInv, h("span", null, "Google 캘린더로 보낼 때 연구진을 참석자로 초대", h("span", { class: "muted", style: "display:block" }, "켜 두면 ‘사이트 일정을 Google 캘린더로 보내기’를 할 때 이 과제의 일정이 연구진의 Google 캘린더에도 들어가고, 초대 메일이 발송됩니다. 일정을 고치거나 지우면 연구진 쪽에도 반영됩니다.")))),
     h("div", { class: "help" }, "여기에 적은 Google 계정 메일로 로그인한 사람만 이 과제를 볼 수 있습니다. 메일을 비워 두면 명단에는 보이지만 그 사람은 들어올 수 없습니다. 관리자는 명단에 없어도 모든 과제를 봅니다."),
     h("div", { class: "stack", style: "gap:8px" }, h("span", { class: "flabel" }, "이 과제의 도구·폴더 (과제 화면에는 여기에 넣은 것만 보입니다. 주소가 빈 줄은 저장되지 않습니다)"), lBox, gBar,
       h("div", { class: "row", style: "gap:8px" }, h("button", { class: "btn", type: "button", onclick: () => addLink({}) }, "도구 추가"), S.links.length ? h("div", { style: "flex:0 1 260px" }, commonPick) : null)),
@@ -1171,7 +1173,7 @@ function eventDialog(p, ev, date) {
     const refData = refs.read(); if (!refData) { err.textContent = "참고 자료 링크는 https:// 로 시작해야 합니다."; return; }
     if (t1.value && t2.value && t2.value < t1.value) { err.textContent = "끝나는 시간이 시작 시간보다 빠릅니다."; return; }
     if (rep.value !== "none" && (!until.value || until.value < d.value)) { err.textContent = "반복 종료일을 시작 날짜와 같거나 그 뒤로 정해 주세요."; return; }
-    const item = { alerts: al.read(), title: title.value.trim(), date: d.value, time: t1.value, endTime: t1.value ? t2.value : "", repeat: rep.value, until: rep.value === "none" ? "" : until.value, place: place.value.trim(), memo: memo.value.trim(), refs: refData, gcalId: ev.gcalId || "", gcalSyncedAt: ev.gcalSyncedAt || "", updatedAt: new Date().toISOString() };
+    const item = { alerts: al.read(), title: title.value.trim(), date: d.value, time: t1.value, endTime: t1.value ? t2.value : "", repeat: rep.value, until: rep.value === "none" ? "" : until.value, place: place.value.trim(), memo: memo.value.trim(), refs: refData, gcalId: ev.gcalId || "", gcalSyncedAt: ev.gcalSyncedAt || "", gcalInv: ev.gcalInv || "", updatedAt: new Date().toISOString() };
     busy(form, true);
     if (await save("일정을 저장", () => setDoc(doc(db, "projects", p.id, "events", ev.id || "e" + newId()), item))) { const dd = D(item.date); S.cal = { y: dd.getFullYear(), m: dd.getMonth() }; closeDlg(); render(); } else busy(form, false);
   } },
@@ -1183,7 +1185,7 @@ function eventDialog(p, ev, date) {
     field("장소 (선택)", "e-place", place), field("메모 (선택)", "e-memo", memo), al.node, refs.node,
     dlgFoot(err, "저장", isNew ? null : async () => {
       if (!await save("일정을 삭제", () => deleteDoc(doc(db, "projects", p.id, "events", ev.id)))) return;
-      if (ev.gcalId && gToken()) { try { await gFetch("events/" + encodeURIComponent(ev.gcalId), { method: "DELETE" }); } catch {} }
+      if (ev.gcalId && gToken()) { try { await gFetch("events/" + encodeURIComponent(ev.gcalId) + (ev.gcalInv ? "?sendUpdates=all" : ""), { method: "DELETE" }); } catch {} }
       else if (ev.gcalId) toast("사이트에서 삭제했습니다. Google 캘린더에 보낸 일정은 Google 캘린더에서 따로 지워 주세요.");
       closeDlg(); }));
   openDlg(form);
@@ -1962,31 +1964,38 @@ async function gLoadMonth(y, m) {
   } catch (e) { G.items = []; G.err = (e && e.code) || "http"; }
   G.key = key; G.loading = false; render();
 }
+// 참석자로 초대할 연구진 메일 (과제 설정에서 켠 경우만, 나 자신은 뺀다)
+const gInvites = p => p.gInvite ? [...new Set((p.memberEmails || []).map(normEmail).filter(m => m && m !== me()))].sort() : [];
+const gSend = (p, e) => gInvites(p).length || e.gcalInv ? "?sendUpdates=all" : "";   // 초대·변경·취소를 연구진에게 알린다
 function gBody(p, e) {
+  const inv = gInvites(p);
   const b = { summary: `[${p.title}] ${e.title}`, location: e.place || "", description: eventDetails(e) };
   if (e.time) { b.start = { dateTime: `${e.date}T${e.time}:00`, timeZone: TZ }; b.end = { dateTime: `${e.date}T${e.endTime || plusHour(e.time)}:00`, timeZone: TZ }; }
   else { b.start = { date: e.date }; b.end = { date: plusDay(e.date) }; }
   const rule = { daily: "FREQ=DAILY", weekly: "FREQ=WEEKLY", biweekly: "FREQ=WEEKLY;INTERVAL=2", monthly: "FREQ=MONTHLY" }[e.repeat];
   if (rule && e.until) b.recurrence = [`RRULE:${rule};UNTIL=${e.until.replace(/-/g, "")}${e.time ? "T145959Z" : ""}`];   // 종료일의 끝(한국 시간 23:59 = UTC 14:59)까지
+  if (inv.length || e.gcalInv) b.attendees = inv.map(email => ({ email }));   // 초대를 껐거나 연구진이 빠지면 참석자에서도 뺀다
   return JSON.stringify(b);
 }
 // 사이트의 회의·일정을 내 Google 캘린더로 보낸다. 보낸 일정의 Google 쪽 id를 적어 두어 같은 일정이 두 번 생기지 않게 한다.
 async function gSync() {
   if (G.busy) return; G.busy = true; render();
   const t = today(), cutoff = iso(new Date(t.getFullYear(), t.getMonth(), t.getDate() - 30));
-  let made = 0, upd = 0;
+  let made = 0, upd = 0, invited = 0;
   try {
     for (const p of S.projects) for (const occ of (S.events[p.id] || [])) {
       if (occ._base && occ._n > 0) continue;   // 반복 일정은 원본 한 건만 보낸다
       const e = occ._base || occ;
       if ((e.repeat && e.repeat !== "none" ? (e.until || e.date) : e.date) < cutoff) continue;
       const ref = doc(db, "projects", p.id, "events", e.id), now = new Date().toISOString();
-      if (e.gcalId && (e.updatedAt || "") <= (e.gcalSyncedAt || "")) continue;
-      let j = e.gcalId ? await gFetch("events/" + encodeURIComponent(e.gcalId), { method: "PATCH", body: gBody(p, e) }) : null;
-      if (j) upd++; else { j = await gFetch("events", { method: "POST", body: gBody(p, e) }); made++; }
-      await updateDoc(ref, { gcalId: (j && j.id) || e.gcalId || "", gcalSyncedAt: now });
+      const invKey = gInvites(p).join(",");
+      if (e.gcalId && (e.updatedAt || "") <= (e.gcalSyncedAt || "") && (e.gcalInv || "") === invKey) continue;   // 일정도 참석자도 그대로면 건너뛴다
+      let j = e.gcalId ? await gFetch("events/" + encodeURIComponent(e.gcalId) + gSend(p, e), { method: "PATCH", body: gBody(p, e) }) : null;
+      if (j) upd++; else { j = await gFetch("events" + gSend(p, e), { method: "POST", body: gBody(p, e) }); made++; }
+      if (invKey) invited++;
+      await updateDoc(ref, { gcalId: (j && j.id) || e.gcalId || "", gcalSyncedAt: now, gcalInv: invKey });
     }
-    G.key = ""; toast(made || upd ? `Google 캘린더에 새로 ${made}건, 수정 ${upd}건을 보냈습니다.` : "새로 보낼 일정이 없습니다. 이미 모두 Google 캘린더에 있습니다.");
+    G.key = ""; toast(made || upd ? `Google 캘린더에 새로 ${made}건, 수정 ${upd}건을 보냈습니다.${invited ? ` 그중 ${invited}건은 연구진을 참석자로 초대했습니다.` : ""}` : "새로 보낼 일정이 없습니다. 이미 모두 Google 캘린더에 있습니다.");
   } catch (e) { toast(gErrText(e && e.code) + (made || upd ? ` (그 전까지 ${made + upd}건은 보냈습니다.)` : "")); }
   G.busy = false; render();
 }
