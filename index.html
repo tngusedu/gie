@@ -1392,20 +1392,25 @@ function manageKinds() {
     dlgFoot(err, "저장"));
   openDlg(form, true);
 }
-const EXTMODE = { paper: "서면", online: "온라인 회의" };
+const EXTMODE = { paper: "서면", online: "온라인 회의", face: "대면" };
+// 대면 외부활동은 신고/미신고로 나뉜다 (declared: false 이면 미신고 → 외부활동 신고서 불필요)
+const extMode = it => it.mode === "face" ? `대면 · ${it.declared === false ? "미신고" : "신고"}` : EXTMODE[it.mode] || EXTMODE.paper;
 const isOuting = k => k === "trip" || k === "ext";   // 서류 절차가 따르는 일정
 // 출장·외부활동에 따르는 서류. 마감: 사전 서류는 전날, 신고서는 끝난 뒤 10일, 복명서는 다녀온 뒤 reportDays일.
 //   일반 출장          : 출장신청서, 출장복명서
 //   외부활동 출장      : 외부활동 승인요청, 출장신청서 기안, 외부활동 신고서 (복명서 불필요)
 //   외부활동 · 온라인 회의: 외부활동 승인요청, 외부활동 신고서
 //   외부활동 · 서면     : 외부활동 승인요청만
+//   외부활동 · 대면(신고)  : 외부활동 승인요청, 출장신청서, 외부활동 신고서
+//   외부활동 · 대면(미신고): 외부활동 승인요청, 출장신청서 (신고서 불필요)
 const addDays = (s, n) => { const d = D(s); return d ? iso(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n)) : ""; };
 function tripSteps(it) {
   const sc = sched(it); if (!sc.start || !isOuting(it.kind)) return [];
   const before = addDays(sc.start, -1), rd = it.reportDays >= 0 ? +it.reportDays : 7, st = it.steps || {};
   const approve = ["approve", "외부활동 승인요청", before, "before"];
   const declare = after => ["declare", `외부활동 신고서 제출 (${after} 10일 이내)`, addDays(sc.end, 10), "after"];
-  const list = it.kind === "ext" ? (it.mode === "online" ? [approve, declare("회의 뒤")] : [approve])
+  const request = ["request", "출장신청서 제출", before, "before"];
+  const list = it.kind === "ext" ? (it.mode === "online" ? [approve, declare("회의 뒤")] : it.mode === "face" ? (it.declared === false ? [approve, request] : [approve, request, declare("활동 뒤")]) : [approve])
     : it.external ? [approve, ["request", "출장신청서 기안", before, "before"], declare("다녀온 뒤")]
     : [["request", "출장신청서 제출", before, "before"], ["report", "출장복명서 제출", addDays(sc.end, rd), "after"]];
   return list.map(([key, label, due, phase]) => ({ key, label, due, phase, done: !!st[key] }));
@@ -1465,11 +1470,13 @@ function personalDialog(it, preset) {
   const canRepeat = k => ["event", "etc", "work"].includes(baseKind(k));   // 출장·외부활동·휴가는 회차마다 서류·일수가 달라 제외. 회사 업무는 회차마다 따로 완료 표시한다.
   const ext = h("select", null, h("option", { value: "0" }, "아니요"), h("option", { value: "1" }, "예 (외부활동)")); ext.value = it.external ? "1" : "0";
   const rdays = h("input", { type: "number", min: 0, max: 60, step: 1, value: it.reportDays >= 0 ? it.reportDays : 7 });
-  const mode = h("select", null, Object.entries(EXTMODE).map(([v, l]) => h("option", { value: v }, l))); mode.value = it.mode === "online" ? "online" : "paper";
+  const mode = h("select", null, Object.entries(EXTMODE).map(([v, l]) => h("option", { value: v }, l))); mode.value = EXTMODE[it.mode] ? it.mode : "paper";
+  const decl = h("select", null, h("option", { value: "1" }, "신고"), h("option", { value: "0" }, "미신고")); decl.value = it.declared === false ? "0" : "1";
+  const fDecl = field("신고 여부", "m-decl", decl);
   const fExt = field("외부활동 여부", "m-ext", ext), fRd = field("복명서 기한 (다녀온 뒤 며칠)", "m-rdays", rdays), fMode = field("형태", "m-mode", mode);
   const stepBox = h("div", { class: "stack", style: "gap:6px" });
   const stepState = { ...(it.steps || {}) };
-  const drawSteps = () => { const cur = { ...it, kind: kind.value, mode: mode.value, external: ext.value === "1", reportDays: parseInt(rdays.value), when: when.value, start: start.value, end: when.value === "range" ? end.value : start.value, steps: stepState };
+  const drawSteps = () => { const cur = { ...it, kind: kind.value, mode: mode.value, declared: decl.value === "1", external: ext.value === "1", reportDays: parseInt(rdays.value), when: when.value, start: start.value, end: when.value === "range" ? end.value : start.value, steps: stepState };
     const list = tripSteps(cur);
     stepBox.hidden = !list.length;
     stepBox.replaceChildren(...(list.length ? [h("span", { class: "flabel" }, "해야 할 서류 (할 일 목록에 자동으로 나옵니다)"), ...list.map(sp => h("label", { class: "row small", style: "gap:8px;flex-wrap:nowrap;align-items:flex-start" },
@@ -1484,11 +1491,12 @@ function personalDialog(it, preset) {
     fStart.querySelector("label").textContent = when.value === "range" ? "시작하는 날" : "날짜";
     fRep.hidden = !canRepeat(k) || when.value === "none"; fUntil.hidden = fRep.hidden || mrep.value === "none";
     if (!fUntil.hidden && !muntil.value && start.value) { const s1 = D(start.value); muntil.value = iso(new Date(s1.getFullYear(), s1.getMonth() + 3, s1.getDate())); }
-    fDays.hidden = !lv; fPlace.hidden = k !== "event" && k !== "etc" && k !== "trip"; fExt.hidden = k !== "trip"; fRd.hidden = !(k === "trip" && ext.value !== "1"); fMode.hidden = k !== "ext";
+    fDays.hidden = !lv; fPlace.hidden = k !== "event" && k !== "etc" && k !== "trip"; fExt.hidden = k !== "trip"; fRd.hidden = !(k === "trip" && ext.value !== "1"); fMode.hidden = k !== "ext"; fDecl.hidden = k !== "ext" || mode.value !== "face";
+    if (k === "ext") fPlace.hidden = mode.value !== "face";
     fPlace.querySelector("label").textContent = k === "trip" ? "출장 장소" : "장소 (선택)";
     fTitle.querySelector("label").textContent = lv ? "메모할 이름 (선택 · 예: 오후 반차)" : k === "work" ? "업무" : k === "trip" ? "출장 목적" : k === "ext" ? "활동 내용" : "제목";
     title.placeholder = k === "work" ? "예: 연간 사업계획서 제출" : k === "event" ? "예: 교육과정 포럼" : k === "trip" ? "예: ○○학회 발표, 학교 방문 면담" : k === "ext" ? "예: ○○ 연구 서면 자문, ○○위원회 온라인 회의" : ""; autoDays(); drawSteps(); };
-  [kind, when, start, end, ext, rdays, mode, mrep].forEach(el => el.addEventListener("change", show)); show();
+  [kind, when, start, end, ext, rdays, mode, decl, mrep].forEach(el => el.addEventListener("change", show)); show();
   const err = h("span", { class: "err" });
   const form = h("form", { class: "dlg", onsubmit: async ev => {
     ev.preventDefault(); err.textContent = "";
@@ -1506,7 +1514,7 @@ function personalDialog(it, preset) {
     const item = { alerts: al.read(), id: it.id || "m" + newId(), kind: k, title: title.value.trim() || (lv ? kindLabel(k) : ""), when: w, start: sd, end: w === "range" ? end.value : sd, time: w === "time" ? time.value : "", endTime: w === "time" ? etime.value : "",
       repeat: rp, until: rp === "none" ? "" : muntil.value, ...(rp !== "none" && k === "work" ? { doneDates: it.doneDates || [] } : {}),
       place: place.value.trim(), memo: memo.value.trim(), days: lv ? dn : 0, done: !!it.done, createdAt: it.createdAt || new Date().toISOString(),
-      ...(k === "trip" ? { external: ext.value === "1", reportDays: Math.max(0, parseInt(rdays.value) || 0), steps: stepState } : k === "ext" ? { mode: mode.value, steps: stepState } : {}) };
+      ...(k === "trip" ? { external: ext.value === "1", reportDays: Math.max(0, parseInt(rdays.value) || 0), steps: stepState } : k === "ext" ? { mode: mode.value, ...(mode.value === "face" ? { declared: decl.value === "1" } : {}), steps: stepState } : {}) };
     busy(form, true);
     if (await saveMe({ items: meRaw().filter(x => x.id !== item.id).concat(item) }, "일정을 저장")) closeDlg(); else busy(form, false);
   } },
@@ -1515,7 +1523,7 @@ function personalDialog(it, preset) {
     h("div", { class: "row", style: "align-items:flex-start" }, field("종류", "m-kind", kind), field("일정", "m-when", when)),
     fTitle, h("div", { class: "row", style: "align-items:flex-start" }, fStart, fEnd, fTime, fEtime),
     h("div", { class: "row", style: "align-items:flex-start" }, fRep, fUntil), fDays, fPlace,
-    h("div", { class: "row", style: "align-items:flex-start" }, fMode, fExt, fRd), stepBox, field("메모 (선택)", "m-memo", memo), al.node,
+    h("div", { class: "row", style: "align-items:flex-start" }, fMode, fDecl, fExt, fRd), stepBox, field("메모 (선택)", "m-memo", memo), al.node,
     dlgFoot(err, "저장", isNew ? null : async () => { if (await ask("이 일정을 지울까요?", "지우기") && await saveMe({ items: meRaw().filter(x => x.id !== it.id) }, "일정을 지우")) closeDlg(); }));
   openDlg(form);
 }
@@ -1545,7 +1553,7 @@ function tripCard() {   // 일정 요약 바로 아래: 다가오는 출장과, 
     trips.length ? trips.map(({ it, sc, steps }) => { const stx = schedText(it), past = sc.end < tdy;
       return h("div", { class: "trip" },
         h("button", { class: "triphead", type: "button", title: "눌러서 수정", onclick: () => personalDialog(it) },
-          h("b", null, it.title), h("span", { class: "chip", style: "margin-left:6px" }, it.kind === "ext" ? `${kindLabel("ext")} · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel("trip")),
+          h("b", null, it.title), h("span", { class: "chip", style: "margin-left:6px" }, it.kind === "ext" ? `${kindLabel("ext")} · ${extMode(it)}` : it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel("trip")),
           h("span", { class: "small muted num", style: "display:block" }, [stx.text + (past ? (it.kind === "ext" ? " · 끝남" : " · 다녀옴") : stx.rel ? " · " + stx.rel : ""), it.place].filter(Boolean).join(" · "))),
         steps.map(sp => { const late = !sp.done && sp.due < tdy, wait = sp.phase === "after" && sc.start > tdy;
           return h("label", { class: "tstep" + (sp.done ? " done" : "") },
@@ -1613,7 +1621,7 @@ function upcomingCard() {
     (p.milestones || []).forEach(x => { if (!x.done && x.date >= tdy) items.push({ date: x.date, time: "", title: x.label, p, kind: "마감" }); });
   }
   if (S.isAdmin) nextOnly(meItems(), it => sched(it).end, tdy).forEach(it => { const sc = sched(it); if (it.kind === "work" || !sc.start || sc.end < tdy) return;
-    items.push({ date: sc.start < tdy ? tdy : sc.start, time: sc.time, title: meTitle(it), p: MEP, me: it, kind: (it.kind === "ext" ? `${kindLabel("ext")} · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.kind === "trip" && it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel(it.kind)) + (it.place ? ` · ${it.place}` : "") + (sc.end !== sc.start ? ` · ${shortD(sc.end)}까지` : "") }); });
+    items.push({ date: sc.start < tdy ? tdy : sc.start, time: sc.time, title: meTitle(it), p: MEP, me: it, kind: (it.kind === "ext" ? `${kindLabel("ext")} · ${extMode(it)}` : it.kind === "trip" && it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel(it.kind)) + (it.place ? ` · ${it.place}` : "") + (sc.end !== sc.start ? ` · ${shortD(sc.end)}까지` : "") }); });
   items.sort((a, b) => (a.date + (a.time || "")).localeCompare(b.date + (b.time || "")));
   const when = i => { const d = D(i.date), n = days(t, d); return (n === 0 ? "오늘" : n < 7 ? WEEK[d.getDay()] : shortD(i.date)) + " " + (i.time || "종일"); };
   return h("section", { class: "panel stack", style: "gap:4px" },
@@ -1761,7 +1769,7 @@ function briefData() {
   const todayList = [];   // 오늘 일정: 눌러서 펼쳐 볼 수 있게 종류·시간·장소까지 담는다
   rooms.forEach(p => (S.events[p.id] || []).forEach(e => { if (e.date === tdy) todayList.push({ time: e.time ? timeOf(e) : "", kind: "회의", title: e.title, sub: [e.place, p.title].filter(Boolean).join(" · "), p, open: () => eventDialog(p, e) }); }));
   mine.forEach(x => { if (schedDays(x.t).includes(tdy)) { const sc = sched(x.t); todayList.push({ time: sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : "", kind: x.t._trip ? x.t._label + " 서류" : x.t._me ? kindLabel("work") : "할 일", title: x.t.title, sub: x.p === MEP ? "" : x.p.title, p: x.p, href: x.p === MEP ? null : "#p-" + x.p.id + "-todo" }); } });
-  if (admin) meItems().forEach(it => { if (it.kind !== "work" && schedDays(it).includes(tdy)) { const sc = sched(it); todayList.push({ time: sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : "", kind: it.kind === "ext" ? `${kindLabel("ext")} · ${EXTMODE[it.mode] || EXTMODE.paper}` : it.kind === "trip" && it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel(it.kind), title: meTitle(it), sub: [it.place, sc.end !== sc.start ? `${shortD(sc.start)}~${shortD(sc.end)}` : ""].filter(Boolean).join(" · "), p: MEP, open: () => personalDialog(it) }); } });
+  if (admin) meItems().forEach(it => { if (it.kind !== "work" && schedDays(it).includes(tdy)) { const sc = sched(it); todayList.push({ time: sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : "", kind: it.kind === "ext" ? `${kindLabel("ext")} · ${extMode(it)}` : it.kind === "trip" && it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel(it.kind), title: meTitle(it), sub: [it.place, sc.end !== sc.start ? `${shortD(sc.start)}~${shortD(sc.end)}` : ""].filter(Boolean).join(" · "), p: MEP, open: () => personalDialog(it) }); } });
   todayList.sort((a, b) => (a.time || "99").localeCompare(b.time || "99"));
   const B = { admin, todayList, todayN: todayList.length,
     lateN: openTasks(x => admin || isMine(x)).filter(x => schedText(x.t).late).length,
@@ -1771,7 +1779,7 @@ function briefData() {
     totalN: rooms.length, trips: [], leave: null, work: null };
   if (admin) {
     B.trips = meItems().filter(it => isOuting(it.kind) && sched(it).end >= tdy).sort((a, b) => schedKey(a).localeCompare(schedKey(b)))
-      .map(it => { const sc = sched(it); return { it, today: sc.start <= tdy, dday: sc.start <= tdy ? 0 : days(t, D(sc.start)), label: it.kind === "ext" ? `${kindLabel("ext")}(${EXTMODE[it.mode] || EXTMODE.paper})` : it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel("trip"),
+      .map(it => { const sc = sched(it); return { it, today: sc.start <= tdy, dday: sc.start <= tdy ? 0 : days(t, D(sc.start)), label: it.kind === "ext" ? `${kindLabel("ext")}(${extMode(it)})` : it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel("trip"),
         when: schedText(it).text + (sc.time ? "" : " 종일"), text: [it.title, schedText(it).text, it.place].filter(Boolean).join(" · ") }; });
     const ls = leaveStats(); B.leave = ls.set ? ls : null;
     if (S.workState === "ok") { const rows = (S.work && S.work.rows) || [], w = workTotals(rows), std = stdHours(n.getFullYear(), n.getMonth() + 1), td = rows.find(x => x.day === n.getDate()) || {};
@@ -1782,7 +1790,7 @@ function briefData() {
 function todayAlert() {   // 일정 알림에 넣을 것: 오늘의 출장·외부활동, 오늘의 회의·행사, 오늘 해야 할 일
   const admin = S.isAdmin, tdy = iso(today()), out = [];
   if (admin) meItems().forEach(it => { if (!isOuting(it.kind) || !schedDays(it).includes(tdy)) return; const sc = sched(it);
-    out.push(`${it.kind === "ext" ? `${kindLabel("ext")}(${EXTMODE[it.mode] || EXTMODE.paper})` : it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel("trip")}: ${[it.title, sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : sc.end !== sc.start ? `${shortD(sc.start)}~${shortD(sc.end)}` : "종일", it.place].filter(Boolean).join(" · ")}`); });
+    out.push(`${it.kind === "ext" ? `${kindLabel("ext")}(${extMode(it)})` : it.external ? `${kindLabel("ext")} ${kindLabel("trip")}` : kindLabel("trip")}: ${[it.title, sc.time ? sc.time + (sc.endTime ? "~" + sc.endTime : "") : sc.end !== sc.start ? `${shortD(sc.start)}~${shortD(sc.end)}` : "종일", it.place].filter(Boolean).join(" · ")}`); });
   const meet = [];
   S.projects.forEach(p => (S.events[p.id] || []).forEach(e => { if (e.date === tdy) meet.push({ t: e.time || "99", s: `회의: ${[(e.time ? timeOf(e) + " " : "") + e.title, e.place, p.title].filter(Boolean).join(" · ")}` }); }));
   if (admin) meItems().forEach(it => { if (it.kind === "event" && schedDays(it).includes(tdy)) { const sc = sched(it); meet.push({ t: sc.time || "99", s: `행사: ${[(sc.time ? sc.time + " " : "") + it.title, it.place].filter(Boolean).join(" · ")}` }); } });
