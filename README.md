@@ -44,9 +44,9 @@ GitHub Pages(화면)와 Firebase(로그인·자료 저장)를 함께 씁니다. 
 
 ## 5. GitHub에 올리기
 
-1. 저장소(tngusedu/gie)에서 **Add file → Upload files** 로 `index.html` 과 `firebase-config.js` 를 올리고 **Commit changes**.
+1. 저장소(tngusedu/research)에서 **Add file → Upload files** 로 `index.html` 과 `firebase-config.js` 를 올리고 **Commit changes**.
 2. 이전 판에서 쓰던 `data.json`, `data (1).json`, `data (2).json` 은 더 이상 쓰지 않으니 지웁니다.
-3. 1~2분 뒤 https://tngusedu.github.io/gie/ 를 새로 고칩니다.
+3. 1~2분 뒤 https://tngusedu.github.io/research/ 를 새로 고칩니다.
 
 ## 6. 쓰는 방법
 
